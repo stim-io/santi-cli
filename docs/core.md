@@ -8,21 +8,30 @@ This repo is public for source visibility and release distribution, not because 
 
 ## Current Shape
 
-- root Rust workspace
 - single primary crate in `app/`
-- no docs site or node-based docs toolchain
-- no broad runtime migration yet
+- current migration slice: config resolution, backend selection, `health`, `chat`, `soul get`, `soul memory set`, and session `create|get|fork|send|messages|effects|compact|compacts|memory get|memory set` over HTTP, with human-friendly default output for the core result-bearing commands
+- HTTP backend is the active path; `local` is reserved and returns a not-yet-implemented error
 
 ## Command Surface Direction
 
 - backend selector vocabulary: `http|local`
 - default backend: `http`
+- config precedence: CLI > env > config file > defaults
+- backend values are strictly `http|local`
 - output default: human-friendly
 - machine-readable mode: `--json`
 - CLI diagnostics: `--log-level` backed by `tracing`
+- the public command surface is intentionally centered on core runtime use, not service administration
 
 ## Non-Goals Right Now
 
 - no attempt to move the whole `santi` runtime here
 - no public tutorial/documentation site
 - no expanded multi-crate layering until the CLI actually needs it
+- no admin hooks reload in the standalone CLI primary surface
+
+## Explicit Boundary Choice
+
+- `santi-cli` intentionally does not expose service-admin hook management in its primary public command surface.
+- Runtime hook replacement remains an admin/API operation (`PUT /api/v1/admin/hooks`), not a standard standalone CLI workflow.
+- This is a deliberate boundary choice: the standalone CLI focuses on core runtime usage and avoids backend-specific operator commands.

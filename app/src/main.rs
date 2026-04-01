@@ -1,50 +1,17 @@
-use std::io::{self, Write};
+mod backend;
+mod cli;
+mod config;
+mod output;
 
 use anyhow::Result;
-use clap::{Parser, ValueEnum};
-use serde::Serialize;
+use clap::Parser;
+use cli::{Backend, Cli, Command};
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum Backend {
-    Http,
-    Local,
-}
-
-#[derive(Debug, Parser)]
-#[command(name = "santi-cli")]
-#[command(about = "Standalone CLI scaffold for santi")]
-struct Cli {
-    #[arg(long, value_enum, env = "SANTI_CLI_BACKEND", default_value = "http")]
-    backend: Backend,
-
-    #[arg(long, env = "SANTI_CLI_LOG_LEVEL", default_value = "info")]
-    log_level: String,
-
-    #[arg(long, global = true)]
-    json: bool,
-
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum Command {
-    /// Minimal scaffold health check
-    Health,
-}
-
-#[derive(Debug, Serialize)]
-struct HealthOutput<'a> {
-    status: &'a str,
-    backend: &'a str,
-    mode: &'a str,
-}
-
 fn main() {
     if let Err(err) = run() {
-        let _ = writeln!(io::stderr(), "error: {err}");
+        eprintln!("error: {err}");
         std::process::exit(1);
     }
 }
@@ -53,59 +20,37 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(&cli.log_level)?;
 
-    debug!(backend = ?cli.backend, json = cli.json, "starting santi-cli scaffold");
+    let config = config::resolve(cli.backend, cli.base_url)?;
+    debug!(backend = ?config.backend, base_url = %config.base_url, "starting santi-cli");
 
-    match cli.command.unwrap_or(Command::Health) {
-        Command::Health => print_health(cli.backend, cli.json)?,
+    match cli.command {
+        Command::Health => match config.backend {
+            Backend::Http => backend::http::health(&config, cli.json),
+            Backend::Local => backend::local::health(),
+        },
+        Command::Chat(command) => match config.backend {
+            Backend::Http => backend::http::chat(&config, cli.json, command),
+            Backend::Local => backend::local::chat(),
+        },
+        Command::Soul { command } => match config.backend {
+            Backend::Http => backend::http::soul(&config, cli.json, command),
+            Backend::Local => match command {
+                cli::SoulCommand::Get => backend::local::soul(),
+                cli::SoulCommand::Memory { command } => match command {
+                    cli::SoulMemoryCommand::Set => backend::local::soul_memory_set(),
+                },
+            },
+        },
+        Command::Session { command } => match config.backend {
+            Backend::Http => backend::http::session(&config, cli.json, command),
+            Backend::Local => backend::local::session(),
+        },
     }
-
-    Ok(())
 }
 
 fn init_tracing(level: &str) -> Result<()> {
     let filter =
         EnvFilter::try_new(level).or_else(|_| EnvFilter::try_new(format!("santi_cli={level}")))?;
-
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(io::stderr)
-        .without_time()
-        .init();
-
+    tracing_subscriber::fmt().with_env_filter(filter).init();
     Ok(())
-}
-
-fn print_health(backend: Backend, json: bool) -> Result<()> {
-    let backend_name = match backend {
-        Backend::Http => "http",
-        Backend::Local => "local",
-    };
-
-    let output = HealthOutput {
-        status: "ok",
-        backend: backend_name,
-        mode: "scaffold",
-    };
-
-    if json {
-        serde_json::to_writer_pretty(io::stdout(), &output)?;
-        writeln!(io::stdout())?;
-    } else {
-        println!("status: ok");
-        println!("backend: {backend_name}");
-        println!("mode: scaffold");
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Backend;
-
-    #[test]
-    fn backend_names_are_stable() {
-        assert_eq!(format!("{:?}", Backend::Http), "Http");
-        assert_eq!(format!("{:?}", Backend::Local), "Local");
-    }
 }
