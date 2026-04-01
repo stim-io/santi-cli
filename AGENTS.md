@@ -36,6 +36,11 @@ This repository owns the standalone `santi-cli` public release unit.
 - Keep release flow tag-driven and artifact-oriented.
 - Prefer the smallest working scaffold over speculative architecture.
 
+## Git Strategy
+
+- Default PR integration strategy is **squash + delete branch**.
+- Treat merged feature branches as disposable after squash merge.
+
 ## Key File Index
 
 - `AGENTS.md`: stable repository boundary and file index
