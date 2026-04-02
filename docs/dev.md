@@ -21,7 +21,7 @@ Current CLI slice:
 - `santi-cli soul get`
 - `santi-cli soul memory set` from stdin
 - `santi-cli session create|get|fork|send|messages|effects|compact|compacts|memory get|memory set`
-- `--backend http|local`, `--json`, and `--log-level`
+- `--base-url`, `--json`, and `--log-level`
 - `chat --raw` and `session send --raw` stream event-shaped output; `--json` returns a summarized machine-readable result
 - `soul get`, `soul memory set`, `session get`, `session fork`, `session compact`, `session compacts`, `session memory get|set`, and `session messages` default to human-readable output; `--json` preserves structured output
 - `local` currently errors as not implemented

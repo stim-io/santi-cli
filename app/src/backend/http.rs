@@ -1,6 +1,6 @@
 use std::{io::Read, thread, time::Duration};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -48,7 +48,6 @@ struct SessionMessage {
 #[derive(Debug, Serialize)]
 struct HealthOutput<'a> {
     status: &'a str,
-    backend: &'a str,
     base_url: Option<&'a str>,
 }
 
@@ -119,12 +118,10 @@ pub fn health(config: &Config, json: bool) -> Result<()> {
     if json {
         output::json(&HealthOutput {
             status: &health.status,
-            backend: "http",
             base_url: Some(&config.base_url),
         })
     } else {
         println!("status: {}", health.status);
-        println!("backend: http");
         println!("base_url: {}", config.base_url);
         Ok(())
     }
