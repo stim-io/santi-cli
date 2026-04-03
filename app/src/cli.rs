@@ -1,19 +1,8 @@
-use clap::{Parser, Subcommand, ValueEnum};
-use serde::Deserialize;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Backend {
-    Http,
-    Local,
-}
+use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "santi-cli")]
 pub struct Cli {
-    #[arg(long, value_enum)]
-    pub backend: Option<Backend>,
-
     #[arg(long)]
     pub base_url: Option<String>,
 

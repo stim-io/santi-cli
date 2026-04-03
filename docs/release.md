@@ -2,9 +2,12 @@
 
 ## Release model
 
-- releases are tag-driven
-- the initial trigger shape is `v*`
+- releases are tag-driven beta releases only
+- the supported tag shape is `v0.1.0-beta.N`
+- stable tags are rejected
 - release artifacts are built from this repo directly
+- archives are produced for Linux, macOS, and Windows, with checksums published alongside them
+- the release gate rejects skipped tests before `fmt`, `test`, and `clippy`
 
 ## Required release gate
 

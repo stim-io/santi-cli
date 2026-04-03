@@ -3,18 +3,21 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
-  workflow_dispatch:
+      - "v0.1.0-beta.*"
 
 permissions:
   contents: write
 
 jobs:
-  verify:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate beta tag
+        shell: bash
+        run: bash scripts/release/accept.sh "${{ github.ref_name }}"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -25,20 +28,23 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run verification
+        shell: bash
         run: bash scripts/verify.sh
 
   build:
-    needs: verify
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive_suffix: linux-x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
           - os: macos-14
             target: aarch64-apple-darwin
-            archive_suffix: darwin-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -52,36 +58,22 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
-        run: cargo build --release --locked --target "${{ matrix.target }}"
-
-      - name: Package archive
+      - name: Build release archive
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          bin_dir="santi-cli-${{ github.ref_name || 'manual' }}-${{ matrix.archive_suffix }}"
-          mkdir -p "$bin_dir"
-          cp "target/${{ matrix.target }}/release/santi-cli" "$bin_dir/"
-          tar -czf "dist/${bin_dir}.tar.gz" "$bin_dir"
+        run: bash scripts/package.sh "${{ github.ref_name }}" "${{ matrix.target }}"
 
       - name: Generate checksum
         shell: bash
-        run: |
-          set -euo pipefail
-          cd dist
-          shasum -a 256 *.tar.gz > checksums-${{ matrix.archive_suffix }}.txt
+        run: bash scripts/release/checksum.sh "dist/checksums-${{ matrix.target }}.txt" dist/*
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.archive_suffix }}
+          name: release-${{ matrix.target }}
           path: |
-            dist/*.tar.gz
-            dist/checksums-*.txt
+            dist/*
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -92,13 +84,12 @@ jobs:
 
       - name: Collate checksums
         shell: bash
-        run: |
-          set -euo pipefail
-          find dist -name 'checksums-*.txt' -exec cat {} \; > dist/checksums.txt
+        run: bash scripts/release/collate.sh dist
 
-      - name: Publish GitHub release
+      - name: Publish GitHub beta release
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: true
           files: |
-            dist/**/*.tar.gz
+            dist/**/*
             dist/checksums.txt

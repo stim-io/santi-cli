@@ -9,15 +9,12 @@ This repo is public for source visibility and release distribution, not because 
 ## Current Shape
 
 - single primary crate in `app/`
-- current migration slice: config resolution, backend selection, `health`, `chat`, `soul get`, `soul memory set`, and session `create|get|fork|send|messages|effects|compact|compacts|memory get|memory set` over HTTP, with human-friendly default output for the core result-bearing commands
-- HTTP backend is the active path; `local` is reserved and returns a not-yet-implemented error
+- current migration slice: config resolution, HTTP client plumbing, `health`, `chat`, `soul get`, `soul memory set`, and session `create|get|fork|send|messages|effects|compact|compacts|memory get|memory set` over HTTP, with human-friendly default output for the core result-bearing commands
 
 ## Command Surface Direction
 
-- backend selector vocabulary: `http|local`
-- default backend: `http`
 - config precedence: CLI > env > config file > defaults
-- backend values are strictly `http|local`
+- default target URL: `http://127.0.0.1:18081`
 - output default: human-friendly
 - machine-readable mode: `--json`
 - CLI diagnostics: `--log-level` backed by `tracing`

@@ -5,7 +5,7 @@ mod output;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Backend, Cli, Command};
+use cli::{Cli, Command};
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
 
@@ -20,31 +20,14 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(&cli.log_level)?;
 
-    let config = config::resolve(cli.backend, cli.base_url)?;
-    debug!(backend = ?config.backend, base_url = %config.base_url, "starting santi-cli");
+    let config = config::resolve(cli.base_url)?;
+    debug!(base_url = %config.base_url, "starting santi-cli");
 
     match cli.command {
-        Command::Health => match config.backend {
-            Backend::Http => backend::http::health(&config, cli.json),
-            Backend::Local => backend::local::health(),
-        },
-        Command::Chat(command) => match config.backend {
-            Backend::Http => backend::http::chat(&config, cli.json, command),
-            Backend::Local => backend::local::chat(),
-        },
-        Command::Soul { command } => match config.backend {
-            Backend::Http => backend::http::soul(&config, cli.json, command),
-            Backend::Local => match command {
-                cli::SoulCommand::Get => backend::local::soul(),
-                cli::SoulCommand::Memory { command } => match command {
-                    cli::SoulMemoryCommand::Set => backend::local::soul_memory_set(),
-                },
-            },
-        },
-        Command::Session { command } => match config.backend {
-            Backend::Http => backend::http::session(&config, cli.json, command),
-            Backend::Local => backend::local::session(),
-        },
+        Command::Health => backend::http::health(&config, cli.json),
+        Command::Chat(command) => backend::http::chat(&config, cli.json, command),
+        Command::Soul { command } => backend::http::soul(&config, cli.json, command),
+        Command::Session { command } => backend::http::session(&config, cli.json, command),
     }
 }
 

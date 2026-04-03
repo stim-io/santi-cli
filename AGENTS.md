@@ -19,11 +19,8 @@ This repository owns the standalone `santi-cli` public release unit.
 
 ## Stable CLI Direction
 
-- Backend vocabulary is `http|local`.
-- Default backend is `http`.
-- Backend configuration should remain overridable by CLI flag, environment, then config.
+- HTTP-only client with `--base-url` overridable by CLI flag, environment, then config.
 - Current migration slice also includes human-default rendering for the core `soul` and `session` commands over HTTP.
-- `local` is reserved and should fail with a clear not-implemented error until the runtime backend lands.
 - Output is human-friendly by default.
 - `--json` is the machine-readable output path.
 - `--log-level` configures CLI-side `tracing`.
@@ -35,6 +32,11 @@ This repository owns the standalone `santi-cli` public release unit.
 - Keep CI minimal but strict: format, test, clippy.
 - Keep release flow tag-driven and artifact-oriented.
 - Prefer the smallest working scaffold over speculative architecture.
+
+## Git Strategy
+
+- Default PR integration strategy is **squash + delete branch**.
+- Treat merged feature branches as disposable after squash merge.
 
 ## Key File Index
 
