@@ -1,6 +1,7 @@
 use std::{io::Read, thread, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
+use anyhow::anyhow;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

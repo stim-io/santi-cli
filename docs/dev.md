@@ -10,9 +10,9 @@ bash scripts/verify.sh
 
 Current verification scope:
 
+- skipped tests are rejected before the Rust checks run
 - `cargo fmt --check`
 - `cargo test --locked`
-- `cargo clippy --locked -- -D warnings`
 
 Current CLI slice:
 
@@ -36,3 +36,7 @@ When adding behavior, keep the command surface small and land the smallest stabl
 - human output on stdout by default
 - `--json` returns machine-readable results on stdout
 - tracing/log output stays on stderr
+
+## Release packaging
+
+Release archives are beta-only (`v0.1.0-beta.N`) and expected for Linux, macOS, and Windows targets, with checksums published for each packaged artifact.
