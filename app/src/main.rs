@@ -18,6 +18,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    validate_output_mode(&cli)?;
     init_tracing(&cli.log_level)?;
 
     let config = config::resolve(cli.base_url)?;
@@ -29,6 +30,28 @@ fn run() -> Result<()> {
         Command::Soul { command } => backend::http::soul(&config, cli.json, command),
         Command::Session { command } => backend::http::session(&config, cli.json, command),
     }
+}
+
+fn validate_output_mode(cli: &Cli) -> Result<()> {
+    if cli.json {
+        match &cli.command {
+            Command::Chat(command) if command.raw => {
+                anyhow::bail!(
+                    "--raw and --json cannot be combined; use --raw for streamed events or --json for the final result"
+                )
+            }
+            Command::Session {
+                command: cli::SessionCommand::Send(command),
+            } if command.raw => {
+                anyhow::bail!(
+                    "--raw and --json cannot be combined; use --raw for streamed events or --json for the final result"
+                )
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 fn init_tracing(level: &str) -> Result<()> {

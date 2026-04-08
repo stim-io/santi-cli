@@ -23,6 +23,7 @@ Current CLI slice:
 - `santi-cli session create|get|fork|send|messages|effects|compact|compacts|memory get|memory set`
 - `--base-url`, `--json`, and `--log-level`
 - `chat --raw` and `session send --raw` stream event-shaped output; `--json` returns a summarized machine-readable result
+- `--raw` and `--json` are mutually exclusive on `chat` and `session send`
 - `soul get`, `soul memory set`, `session get`, `session fork`, `session compact`, `session compacts`, `session memory get|set`, and `session messages` default to human-readable output; `--json` preserves structured output
 - `local` currently errors as not implemented
 - admin hook reload is intentionally excluded from this standalone CLI surface
