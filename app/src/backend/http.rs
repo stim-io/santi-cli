@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::{
     cli::{
         ChatCommand, SessionCommand, SessionCompactCommand, SessionForkCommand,
-        SessionMemoryCommand, SoulCommand, SoulMemoryCommand,
+        SessionMemoryCommand, SoulCommand, SoulMemoryCommand, SoulMemorySetCommand,
     },
     config::Config,
     output,
@@ -56,6 +56,17 @@ struct HealthOutput<'a> {
 struct ChatOutput<'a> {
     session_id: &'a str,
     output_text: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionMemoryOutput {
+    session_id: String,
+    memory: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+    exists: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,11 +145,21 @@ pub fn chat(config: &Config, json: bool, command: ChatCommand) -> Result<()> {
         return Err(anyhow!("expected message argument or stdin content"));
     }
     let client = reqwest::blocking::Client::new();
+    let mut created_session_id = None;
     let session_id = match command.session {
         Some(session) => session,
-        None => create_session(&client, config, false)?.id,
+        None => {
+            let session = create_session(&client, config, false)?;
+            created_session_id = Some(session.id.clone());
+            session.id
+        }
     };
-    eprintln!("session: {session_id}");
+    if !json
+        && !command.raw
+        && let Some(session_id) = created_session_id.as_deref()
+    {
+        output::stderr_line(&format!("session_id: {session_id}"))?;
+    }
     send_message(
         &client,
         config,
@@ -181,9 +202,11 @@ pub fn session(config: &Config, json: bool, command: SessionCommand) -> Result<(
             }
         }
         SessionCommand::Send(command) => {
-            let message = output::read_message(None)?;
+            let message = output::read_message(command.message)?;
             if message.trim().is_empty() {
-                return Err(anyhow!("expected stdin content for session send"));
+                return Err(anyhow!(
+                    "expected message argument or stdin content for session send"
+                ));
             }
             send_message(
                 &client,
@@ -221,11 +244,14 @@ pub fn session(config: &Config, json: bool, command: SessionCommand) -> Result<(
                 }
             }
             SessionMemoryCommand::Set(command) => {
-                let text = output::read_message(None)?;
+                let text = output::read_message(command.text)?;
                 if text.trim().is_empty() {
-                    return Err(anyhow!("expected stdin content for session memory set"));
+                    return Err(anyhow!(
+                        "expected text argument or stdin content for session memory set"
+                    ));
                 }
                 let memory = set_session_memory(&client, config, &command.id, &text)?;
+                let memory = memory.into_output(&command.id);
                 if json {
                     output::json(&memory)
                 } else {
@@ -240,15 +266,17 @@ pub fn soul(config: &Config, json: bool, command: SoulCommand) -> Result<()> {
     match command {
         SoulCommand::Get => get_soul(config, json),
         SoulCommand::Memory { command } => match command {
-            SoulMemoryCommand::Set => set_soul_memory(config, json),
+            SoulMemoryCommand::Set(command) => set_soul_memory(config, json, command),
         },
     }
 }
 
-fn set_soul_memory(config: &Config, json: bool) -> Result<()> {
-    let text = output::read_message(None)?;
+fn set_soul_memory(config: &Config, json: bool, command: SoulMemorySetCommand) -> Result<()> {
+    let text = output::read_message(command.text)?;
     if text.trim().is_empty() {
-        return Err(anyhow!("expected stdin content for soul memory set"));
+        return Err(anyhow!(
+            "expected text argument or stdin content for soul memory set"
+        ));
     }
 
     let client = reqwest::blocking::Client::new();
@@ -387,9 +415,11 @@ fn compact_session(
     command: &SessionCompactCommand,
     json: bool,
 ) -> Result<()> {
-    let summary = output::read_message(None)?;
+    let summary = output::read_message(command.summary.clone())?;
     if summary.trim().is_empty() {
-        return Err(anyhow!("expected stdin content for session compact"));
+        return Err(anyhow!(
+            "expected summary argument or stdin content for session compact"
+        ));
     }
     let response = client
         .post(format!(
@@ -442,8 +472,12 @@ fn print_compacts(compacts: &[SessionCompactResponse]) -> Result<()> {
     println!("compacts: {}", compacts.len());
     for compact in compacts {
         println!(
-            "- {} [{}..{}] {}",
-            compact.id, compact.start_session_seq, compact.end_session_seq, compact.summary
+            "- id: {} turn_id: {} seq: [{}..{}] {}",
+            compact.id,
+            compact.turn_id,
+            compact.start_session_seq,
+            compact.end_session_seq,
+            preview_text(&compact.summary)
         );
     }
     Ok(())
@@ -457,17 +491,15 @@ fn print_messages(messages: &[SessionMessage]) -> Result<()> {
     println!("messages: {}", messages.len());
     for message in messages {
         println!(
-            "- {} [{}] {}",
-            message.actor_type, message.session_seq, message.content_text
+            "- id: {} seq: {} actor: {}:{} state: {} {}",
+            message.id,
+            message.session_seq,
+            message.actor_type,
+            message.actor_id,
+            message.state,
+            preview_text(&message.content_text)
         );
     }
-    Ok(())
-}
-
-fn print_memory(memory: &SessionMemoryResponse) -> Result<()> {
-    println!("id: {}", memory.id);
-    println!("memory: {}", memory.memory);
-    println!("updated_at: {}", memory.updated_at);
     Ok(())
 }
 
@@ -537,9 +569,31 @@ fn print_effects(effects: &[SessionEffect]) -> Result<()> {
             serde_json::Value::String(text) => text.clone(),
             other => other.to_string(),
         };
-        println!("- {} [{}] {}", effect.name, effect.state, value);
+        println!(
+            "- id: {} name: {} state: {} {}",
+            effect.id,
+            effect.name,
+            effect.state,
+            preview_text(&value)
+        );
     }
     Ok(())
+}
+
+fn preview_text(text: &str) -> String {
+    const MAX_PREVIEW_CHARS: usize = 120;
+
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if normalized.chars().count() <= MAX_PREVIEW_CHARS {
+        return normalized;
+    }
+
+    normalized
+        .chars()
+        .take(MAX_PREVIEW_CHARS)
+        .collect::<String>()
+        + "…"
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -549,21 +603,49 @@ struct SessionMemoryResponse {
     updated_at: String,
 }
 
+impl SessionMemoryResponse {
+    fn into_output(self, session_id: &str) -> SessionMemoryOutput {
+        SessionMemoryOutput {
+            session_id: session_id.to_owned(),
+            memory: self.memory,
+            memory_id: Some(self.id),
+            updated_at: Some(self.updated_at),
+            exists: true,
+        }
+    }
+}
+
+impl SessionMemoryOutput {
+    fn empty(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_owned(),
+            memory: String::new(),
+            memory_id: None,
+            updated_at: None,
+            exists: false,
+        }
+    }
+}
+
 fn get_session_memory(
     client: &reqwest::blocking::Client,
     config: &Config,
     id: &str,
-) -> Result<SessionMemoryResponse> {
+) -> Result<SessionMemoryOutput> {
     let response = client
         .get(format!(
             "{}/api/v1/sessions/{id}/memory",
             config.base_url.trim_end_matches('/')
         ))
         .send()?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(SessionMemoryOutput::empty(id));
+    }
     if !response.status().is_success() {
         return Err(anyhow!("session memory get failed: {}", response.status()));
     }
-    Ok(response.json()?)
+    let memory: SessionMemoryResponse = response.json()?;
+    Ok(memory.into_output(id))
 }
 
 fn set_session_memory(
@@ -584,6 +666,20 @@ fn set_session_memory(
     }
     Ok(response.json()?)
 }
+
+fn print_memory(memory: &SessionMemoryOutput) -> Result<()> {
+    println!("session_id: {}", memory.session_id);
+    println!("exists: {}", memory.exists);
+    if let Some(memory_id) = memory.memory_id.as_deref() {
+        println!("memory_id: {memory_id}");
+    }
+    if let Some(updated_at) = memory.updated_at.as_deref() {
+        println!("updated_at: {updated_at}");
+    }
+    println!("memory: {}", memory.memory);
+    Ok(())
+}
+
 fn send_message(
     client: &reqwest::blocking::Client,
     config: &Config,
@@ -649,4 +745,54 @@ fn send_message(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionMemoryOutput, SessionMemoryResponse, preview_text};
+
+    #[test]
+    fn session_memory_output_serializes_empty_state() {
+        let value = serde_json::to_value(SessionMemoryOutput::empty("session-123")).unwrap();
+
+        assert_eq!(value["session_id"], "session-123");
+        assert_eq!(value["memory"], "");
+        assert_eq!(value["exists"], false);
+        assert!(value.get("memory_id").is_none());
+        assert!(value.get("updated_at").is_none());
+    }
+
+    #[test]
+    fn session_memory_output_preserves_identity_fields() {
+        let response = SessionMemoryResponse {
+            id: "memory-123".into(),
+            memory: "stored memory".into(),
+            updated_at: "2026-04-08T00:00:00Z".into(),
+        };
+
+        let value = serde_json::to_value(response.into_output("session-123")).unwrap();
+
+        assert_eq!(value["session_id"], "session-123");
+        assert_eq!(value["memory_id"], "memory-123");
+        assert_eq!(value["memory"], "stored memory");
+        assert_eq!(value["updated_at"], "2026-04-08T00:00:00Z");
+        assert_eq!(value["exists"], true);
+    }
+
+    #[test]
+    fn preview_text_flattens_whitespace() {
+        assert_eq!(
+            preview_text("hello\n\nworld\tfrom cli"),
+            "hello world from cli"
+        );
+    }
+
+    #[test]
+    fn preview_text_truncates_long_content() {
+        let input = "x".repeat(140);
+        let preview = preview_text(&input);
+
+        assert_eq!(preview.chars().count(), 121);
+        assert!(preview.ends_with('…'));
+    }
 }

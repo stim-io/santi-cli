@@ -17,6 +17,7 @@ This repo is public for source visibility and release distribution, not because 
 - default target URL: `http://127.0.0.1:18081`
 - output default: human-friendly
 - machine-readable mode: `--json`
+- streamed event mode: `--raw` on chat/send, mutually exclusive with `--json`
 - CLI diagnostics: `--log-level` backed by `tracing`
 - the public command surface is intentionally centered on core runtime use, not service administration
 
