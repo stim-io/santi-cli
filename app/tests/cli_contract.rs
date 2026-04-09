@@ -19,6 +19,28 @@ fn wrapped_effects_response_body() -> &'static str {
     r#"{"effects":[{"id":"effect_123","session_id":"sess_test","effect_type":"hook_fork_handoff","idempotency_key":"hook_fork_handoff:auto-fork-handoff:turn_123:6","status":"completed","source_hook_id":"auto-fork-handoff","source_turn_id":"turn_123","result_ref":"sess_child","error_text":null,"created_at":"2026-04-09T00:00:00Z","updated_at":"2026-04-09T00:00:01Z"}]}"#
 }
 
+fn wrapped_messages_response_body(messages: &[&str]) -> String {
+    let body = messages
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let session_seq = index as i64 + 1;
+            let actor_type = if index % 2 == 0 { "account" } else { "soul" };
+            let actor_id = if index % 2 == 0 {
+                "account_local"
+            } else {
+                "soul_default"
+            };
+            format!(
+                "{{\"id\":\"msg_{session_seq}\",\"actor_type\":\"{actor_type}\",\"actor_id\":\"{actor_id}\",\"session_seq\":{session_seq},\"content_text\":\"{text}\",\"state\":\"fixed\",\"created_at\":\"2026-04-09T00:00:0{session_seq}Z\"}}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!("{{\"messages\":[{body}]}}")
+}
+
 fn spawn_stub_server(requests: Vec<ExpectedRequest<'static>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -239,6 +261,97 @@ fn session_send_rejects_json_and_raw_together() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--raw"));
     assert!(stderr.contains("--json"));
+}
+
+#[test]
+fn session_watch_rejects_json_mode() {
+    let output = Command::cargo_bin("santi-cli")
+        .unwrap()
+        .args(["--json", "session", "watch", "sess_test"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("session watch"));
+    assert!(stderr.contains("--json"));
+}
+
+#[test]
+fn session_watch_prints_new_message_and_stops_after_idle_timeout() {
+    let base_url = spawn_stub_server(vec![
+        ExpectedRequest {
+            method: "GET",
+            path: "/api/v1/sessions/sess_test/messages",
+            status: "200 OK",
+            content_type: "application/json",
+            body: Box::leak(wrapped_messages_response_body(&["start task"]).into_boxed_str()),
+        },
+        ExpectedRequest {
+            method: "GET",
+            path: "/api/v1/sessions/sess_test/effects",
+            status: "200 OK",
+            content_type: "application/json",
+            body: r#"{"effects":[]}"#,
+        },
+        ExpectedRequest {
+            method: "GET",
+            path: "/api/v1/sessions/sess_test/messages",
+            status: "200 OK",
+            content_type: "application/json",
+            body: Box::leak(
+                wrapped_messages_response_body(&["start task", "done"]).into_boxed_str(),
+            ),
+        },
+        ExpectedRequest {
+            method: "GET",
+            path: "/api/v1/sessions/sess_test/effects",
+            status: "200 OK",
+            content_type: "application/json",
+            body: r#"{"effects":[]}"#,
+        },
+        ExpectedRequest {
+            method: "GET",
+            path: "/api/v1/sessions/sess_test/messages",
+            status: "200 OK",
+            content_type: "application/json",
+            body: Box::leak(
+                wrapped_messages_response_body(&["start task", "done"]).into_boxed_str(),
+            ),
+        },
+        ExpectedRequest {
+            method: "GET",
+            path: "/api/v1/sessions/sess_test/effects",
+            status: "200 OK",
+            content_type: "application/json",
+            body: r#"{"effects":[]}"#,
+        },
+    ]);
+
+    let output = Command::cargo_bin("santi-cli")
+        .unwrap()
+        .args([
+            "--base-url",
+            &base_url,
+            "session",
+            "watch",
+            "sess_test",
+            "--poll-ms",
+            "10",
+            "--idle-ms",
+            "10",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(":: watch session_id=sess_test status=started poll_ms=10 idle_ms=10"));
+    assert!(stdout.contains(":: message id=msg_2 seq=2 actor=soul:soul_default state=fixed"));
+    assert!(stdout.contains(":: content_begin\ndone\n:: content_end"));
+    assert!(stdout.contains(":: watch session_id=sess_test status=idle_timeout"));
 }
 
 #[test]

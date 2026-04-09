@@ -1,4 +1,4 @@
-use std::{io::Read, thread, time::Duration};
+use std::{collections::BTreeSet, io::Read, thread, time::{Duration, Instant}};
 
 use anyhow::Result;
 use anyhow::anyhow;
@@ -9,7 +9,8 @@ use uuid::Uuid;
 use crate::{
     cli::{
         ChatCommand, SessionCommand, SessionCompactCommand, SessionForkCommand,
-        SessionMemoryCommand, SoulCommand, SoulMemoryCommand, SoulMemorySetCommand,
+        SessionMemoryCommand, SessionWatchCommand, SoulCommand, SoulMemoryCommand,
+        SoulMemorySetCommand,
     },
     config::Config,
     output,
@@ -35,7 +36,7 @@ struct ForkResponse {
     fork_point: i64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct SessionMessage {
     id: String,
     actor_type: String,
@@ -89,7 +90,7 @@ struct SessionCompactsResponse {
     compacts: Vec<SessionCompactResponse>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct SessionEffect {
     id: String,
     session_id: String,
@@ -250,6 +251,7 @@ pub fn session(config: &Config, json: bool, command: SessionCommand) -> Result<(
                 print_effects(&effects)
             }
         }
+        SessionCommand::Watch(command) => watch_session(&client, config, &command),
         SessionCommand::Memory { command } => match command {
             SessionMemoryCommand::Get(command) => {
                 let memory = get_session_memory(&client, config, &command.id)?;
@@ -275,6 +277,90 @@ pub fn session(config: &Config, json: bool, command: SessionCommand) -> Result<(
                 }
             }
         },
+    }
+}
+
+fn watch_session(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    command: &SessionWatchCommand,
+) -> Result<()> {
+    if command.poll_ms == 0 {
+        return Err(anyhow!("--poll-ms must be greater than 0"));
+    }
+
+    let mut snapshot = SessionWatchSnapshot::load(client, config, &command.id)?;
+    println!(
+        ":: watch session_id={} status=started poll_ms={} idle_ms={} baseline_messages={} baseline_effects={} last_seq={}",
+        command.id,
+        command.poll_ms,
+        command.idle_ms,
+        snapshot.messages.len(),
+        snapshot.effects.len(),
+        snapshot.messages.last().map(|message| message.session_seq).unwrap_or(0)
+    );
+
+    let mut idle_started = Instant::now();
+    let mut last_wait_notice = Instant::now();
+    let mut has_seen_new_activity = false;
+
+    loop {
+        thread::sleep(Duration::from_millis(command.poll_ms));
+        let next = SessionWatchSnapshot::load(client, config, &command.id)?;
+        let mut observed_change = false;
+
+        for message in next.new_messages_since(&snapshot) {
+            observed_change = true;
+            println!(
+                ":: message id={} seq={} actor={}:{} state={}",
+                message.id,
+                message.session_seq,
+                message.actor_type,
+                message.actor_id,
+                message.state
+            );
+            println!(":: content_begin");
+            println!("{}", message.content_text);
+            println!(":: content_end");
+        }
+
+        for effect in next.new_effects_since(&snapshot) {
+            observed_change = true;
+            let mut line = format!(
+                ":: effect id={} type={} status={} hook={}",
+                effect.id, effect.effect_type, effect.status, effect.source_hook_id
+            );
+            if let Some(result_ref) = effect.result_ref.as_deref() {
+                line.push_str(&format!(" result_ref={result_ref}"));
+            }
+            if let Some(error_text) = effect.error_text.as_deref() {
+                line.push_str(&format!(" error={}", preview_text(error_text)));
+            }
+            println!("{line}");
+        }
+
+        if observed_change {
+            has_seen_new_activity = true;
+            idle_started = Instant::now();
+            last_wait_notice = Instant::now();
+            snapshot = next;
+            continue;
+        }
+
+        snapshot = next;
+
+        if has_seen_new_activity
+            && command.idle_ms > 0
+            && idle_started.elapsed() >= Duration::from_millis(command.idle_ms)
+        {
+            println!(":: watch session_id={} status=idle_timeout", command.id);
+            return Ok(());
+        }
+
+        if last_wait_notice.elapsed() >= Duration::from_secs(10) {
+            println!(":: watch session_id={} status=waiting", command.id);
+            last_wait_notice = Instant::now();
+        }
     }
 }
 
@@ -573,6 +659,47 @@ struct SessionEffectsResponse {
     effects: Vec<SessionEffect>,
 }
 
+#[derive(Debug, Clone)]
+struct SessionWatchSnapshot {
+    messages: Vec<SessionMessage>,
+    effects: Vec<SessionEffect>,
+}
+
+impl SessionWatchSnapshot {
+    fn load(client: &reqwest::blocking::Client, config: &Config, session_id: &str) -> Result<Self> {
+        Ok(Self {
+            messages: list_messages(client, config, session_id)?,
+            effects: list_effects(client, config, session_id)?,
+        })
+    }
+
+    fn new_messages_since<'a>(&'a self, previous: &'a Self) -> Vec<&'a SessionMessage> {
+        let seen = previous
+            .messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<BTreeSet<_>>();
+
+        self.messages
+            .iter()
+            .filter(|message| !seen.contains(message.id.as_str()))
+            .collect()
+    }
+
+    fn new_effects_since<'a>(&'a self, previous: &'a Self) -> Vec<&'a SessionEffect> {
+        let seen = previous
+            .effects
+            .iter()
+            .map(|effect| effect.id.as_str())
+            .collect::<BTreeSet<_>>();
+
+        self.effects
+            .iter()
+            .filter(|effect| !seen.contains(effect.id.as_str()))
+            .collect()
+    }
+}
+
 fn print_effects(effects: &[SessionEffect]) -> Result<()> {
     if effects.is_empty() {
         println!("no session effects recorded");
@@ -823,4 +950,5 @@ mod tests {
         assert_eq!(preview.chars().count(), 121);
         assert!(preview.ends_with('…'));
     }
+
 }
