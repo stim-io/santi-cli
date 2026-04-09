@@ -92,11 +92,16 @@ struct SessionCompactsResponse {
 #[derive(Debug, Deserialize, Serialize)]
 struct SessionEffect {
     id: String,
-    name: String,
-    value: serde_json::Value,
-    state: String,
-    created_at: Option<String>,
-    updated_at: Option<String>,
+    session_id: String,
+    effect_type: String,
+    idempotency_key: String,
+    status: String,
+    source_hook_id: String,
+    source_turn_id: String,
+    result_ref: Option<String>,
+    error_text: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -113,6 +118,17 @@ enum SseEvent {
     Delta { delta: String },
     #[serde(rename = "response.completed")]
     Completed,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseErrorEnvelope {
+    error: SseErrorBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseErrorBody {
+    code: String,
+    message: String,
 }
 
 pub fn health(config: &Config, json: bool) -> Result<()> {
@@ -565,17 +581,22 @@ fn print_effects(effects: &[SessionEffect]) -> Result<()> {
 
     println!("effects: {}", effects.len());
     for effect in effects {
-        let value = match &effect.value {
-            serde_json::Value::String(text) => text.clone(),
-            other => other.to_string(),
-        };
-        println!(
-            "- id: {} name: {} state: {} {}",
-            effect.id,
-            effect.name,
-            effect.state,
-            preview_text(&value)
-        );
+        let mut parts = vec![
+            format!("- id: {}", effect.id),
+            format!("type: {}", effect.effect_type),
+            format!("status: {}", effect.status),
+            format!("hook: {}", effect.source_hook_id),
+        ];
+
+        if let Some(result_ref) = effect.result_ref.as_deref() {
+            parts.push(format!("result_ref: {}", result_ref));
+        }
+
+        if let Some(error_text) = effect.error_text.as_deref() {
+            parts.push(format!("error: {}", preview_text(error_text)));
+        }
+
+        println!("{}", parts.join(" "));
     }
     Ok(())
 }
@@ -711,6 +732,13 @@ fn send_message(
         if let Some(payload) = line.strip_prefix("data: ") {
             if payload.is_empty() || payload == "[DONE]" {
                 continue;
+            }
+            if let Ok(error) = serde_json::from_str::<SseErrorEnvelope>(payload) {
+                return Err(anyhow!(
+                    "send stream failed: {}: {}",
+                    error.error.code,
+                    error.error.message
+                ));
             }
             if let Ok(event) = serde_json::from_str::<SseEvent>(payload) {
                 match event {

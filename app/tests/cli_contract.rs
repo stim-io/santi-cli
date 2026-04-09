@@ -15,6 +15,10 @@ struct ExpectedRequest<'a> {
     body: &'a str,
 }
 
+fn wrapped_effects_response_body() -> &'static str {
+    r#"{"effects":[{"id":"effect_123","session_id":"sess_test","effect_type":"hook_fork_handoff","idempotency_key":"hook_fork_handoff:auto-fork-handoff:turn_123:6","status":"completed","source_hook_id":"auto-fork-handoff","source_turn_id":"turn_123","result_ref":"sess_child","error_text":null,"created_at":"2026-04-09T00:00:00Z","updated_at":"2026-04-09T00:00:01Z"}]}"#
+}
+
 fn spawn_stub_server(requests: Vec<ExpectedRequest<'static>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -142,7 +146,7 @@ fn chat_human_auto_create_puts_session_on_stderr() {
         ExpectedRequest {
             method: "POST",
             path: "/api/v1/sessions",
-            status: "200 OK",
+            status: "201 Created",
             content_type: "application/json",
             body: r#"{"id":"sess_test","parent_session_id":null,"fork_point":null,"created_at":"2026-04-08T00:00:00Z"}"#,
         },
@@ -235,4 +239,95 @@ fn session_send_rejects_json_and_raw_together() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--raw"));
     assert!(stderr.contains("--json"));
+}
+
+#[test]
+fn session_effects_json_decodes_wrapped_effects_response() {
+    let base_url = spawn_stub_server(vec![ExpectedRequest {
+        method: "GET",
+        path: "/api/v1/sessions/sess_test/effects",
+        status: "200 OK",
+        content_type: "application/json",
+        body: wrapped_effects_response_body(),
+    }]);
+
+    let output = Command::cargo_bin("santi-cli")
+        .unwrap()
+        .args([
+            "--base-url",
+            &base_url,
+            "--json",
+            "session",
+            "effects",
+            "sess_test",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed[0]["id"], "effect_123");
+    assert_eq!(parsed[0]["effect_type"], "hook_fork_handoff");
+    assert_eq!(parsed[0]["result_ref"], "sess_child");
+}
+
+#[test]
+fn session_effects_human_prints_effect_summary() {
+    let base_url = spawn_stub_server(vec![ExpectedRequest {
+        method: "GET",
+        path: "/api/v1/sessions/sess_test/effects",
+        status: "200 OK",
+        content_type: "application/json",
+        body: wrapped_effects_response_body(),
+    }]);
+
+    let output = Command::cargo_bin("santi-cli")
+        .unwrap()
+        .args(["--base-url", &base_url, "session", "effects", "sess_test"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "effects: 1\n- id: effect_123 type: hook_fork_handoff status: completed hook: auto-fork-handoff result_ref: sess_child\n"
+    );
+}
+
+#[test]
+fn session_send_fails_on_sse_error_payload() {
+    let base_url = spawn_stub_server(vec![ExpectedRequest {
+        method: "POST",
+        path: "/api/v1/sessions/sess_test/send",
+        status: "200 OK",
+        content_type: "text/event-stream",
+        body: concat!(
+            "data: {\"error\":{\"code\":\"conflict\",\"message\":\"session send already in progress\"}}\n\n",
+            "data: [DONE]\n\n"
+        ),
+    }]);
+
+    let output = Command::cargo_bin("santi-cli")
+        .unwrap()
+        .args([
+            "--base-url",
+            &base_url,
+            "--json",
+            "session",
+            "send",
+            "sess_test",
+            "hello",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("send stream failed"));
+    assert!(stderr.contains("conflict"));
 }
