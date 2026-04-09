@@ -72,6 +72,8 @@ pub enum SessionCommand {
     Messages(SessionIdCommand),
     #[command(about = "List session effects")]
     Effects(SessionIdCommand),
+    #[command(about = "Watch session activity as human-readable progress")]
+    Watch(SessionWatchCommand),
     #[command(about = "Inspect and replace session memory")]
     Memory {
         #[command(subcommand)]
@@ -159,6 +161,18 @@ pub struct SessionForkCommand {
     pub fork_point: i64,
 }
 
+#[derive(Debug, clap::Args)]
+#[command(about = "Poll session activity until interrupted or idle timeout")]
+pub struct SessionWatchCommand {
+    pub id: String,
+
+    #[arg(long, default_value_t = 1000)]
+    pub poll_ms: u64,
+
+    #[arg(long, default_value_t = 0)]
+    pub idle_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -221,6 +235,32 @@ mod tests {
                     },
             } => {
                 assert_eq!(command.text.as_deref(), Some("core memory"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_watch_accepts_poll_and_idle_options() {
+        let cli = Cli::try_parse_from([
+            "santi-cli",
+            "session",
+            "watch",
+            "session-123",
+            "--poll-ms",
+            "250",
+            "--idle-ms",
+            "5000",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Session {
+                command: SessionCommand::Watch(command),
+            } => {
+                assert_eq!(command.id, "session-123");
+                assert_eq!(command.poll_ms, 250);
+                assert_eq!(command.idle_ms, 5000);
             }
             other => panic!("unexpected command: {other:?}"),
         }

@@ -47,6 +47,13 @@ fn validate_output_mode(cli: &Cli) -> Result<()> {
                     "--raw and --json cannot be combined; use --raw for streamed events or --json for the final result"
                 )
             }
+            Command::Session {
+                command: cli::SessionCommand::Watch(_),
+            } => {
+                anyhow::bail!(
+                    "session watch is human-oriented streaming output only; do not combine it with --json"
+                )
+            }
             _ => {}
         }
     }
