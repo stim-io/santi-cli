@@ -1,4 +1,9 @@
-use std::{collections::BTreeSet, io::Read, thread, time::{Duration, Instant}};
+use std::{
+    collections::BTreeSet,
+    io::Read,
+    thread,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use anyhow::anyhow;
@@ -297,7 +302,11 @@ fn watch_session(
         command.idle_ms,
         snapshot.messages.len(),
         snapshot.effects.len(),
-        snapshot.messages.last().map(|message| message.session_seq).unwrap_or(0)
+        snapshot
+            .messages
+            .last()
+            .map(|message| message.session_seq)
+            .unwrap_or(0)
     );
 
     let mut idle_started = Instant::now();
@@ -950,5 +959,4 @@ mod tests {
         assert_eq!(preview.chars().count(), 121);
         assert!(preview.ends_with('…'));
     }
-
 }
