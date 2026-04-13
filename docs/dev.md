@@ -24,7 +24,7 @@ Current CLI slice:
 - `--base-url`, `--json`, and `--log-level`
 - `chat --raw` and `session send --raw` stream event-shaped output; `--json` returns a summarized machine-readable result
 - `--raw` and `--json` are mutually exclusive on `chat` and `session send`
-- `session watch <id>` is the human-oriented long-running observation path; it polls session-visible activity, emits `::` metadata lines, and places message bodies inside explicit content boundaries so CLI metadata and `santi` content stay visually separate
+- `session watch <id>` is the human-oriented long-running observation path; it loads a watch snapshot, then follows runtime-owned watch SSE events, emits `::` metadata lines, and places message bodies inside explicit content boundaries so CLI metadata and `santi` content stay visually separate
 - `soul get`, `soul memory set`, `session get`, `session fork`, `session compact`, `session compacts`, `session memory get|set`, and `session messages` default to human-readable output; `--json` preserves structured output
 - `local` currently errors as not implemented
 - admin hook reload is intentionally excluded from this standalone CLI surface

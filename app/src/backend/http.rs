@@ -1,8 +1,9 @@
 use std::{
     collections::BTreeSet,
-    io::Read,
+    io::{BufRead, BufReader, Read},
+    sync::mpsc,
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -290,86 +291,84 @@ fn watch_session(
     config: &Config,
     command: &SessionWatchCommand,
 ) -> Result<()> {
-    if command.poll_ms == 0 {
-        return Err(anyhow!("--poll-ms must be greater than 0"));
-    }
-
     let mut snapshot = SessionWatchSnapshot::load(client, config, &command.id)?;
     println!(
-        ":: watch session_id={} status=started poll_ms={} idle_ms={} baseline_messages={} baseline_effects={} last_seq={}",
-        command.id,
-        command.poll_ms,
+        ":: watch session_id={} status=started transport=sse idle_ms={} baseline_messages={} baseline_effects={} last_seq={}",
+        snapshot.session_id,
         command.idle_ms,
         snapshot.messages.len(),
         snapshot.effects.len(),
-        snapshot
-            .messages
-            .last()
-            .map(|message| message.session_seq)
-            .unwrap_or(0)
+        snapshot.latest_seq
     );
 
-    let mut idle_started = Instant::now();
-    let mut last_wait_notice = Instant::now();
-    let mut has_seen_new_activity = false;
+    let response = client
+        .get(format!(
+            "{}/api/v1/sessions/{}/watch",
+            config.base_url.trim_end_matches('/'),
+            command.id
+        ))
+        .send()?;
+    if !response.status().is_success() {
+        return Err(anyhow!("session watch failed: {}", response.status()));
+    }
+
+    let (tx, rx) = mpsc::channel::<Result<Option<String>, String>>();
+    thread::spawn(move || {
+        let reader = BufReader::new(response);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    if tx.send(Ok(Some(line))).is_err() {
+                        return;
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err.to_string()));
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(Ok(None));
+    });
 
     loop {
-        thread::sleep(Duration::from_millis(command.poll_ms));
-        let next = SessionWatchSnapshot::load(client, config, &command.id)?;
-        let mut observed_change = false;
-
-        for message in next.new_messages_since(&snapshot) {
-            observed_change = true;
-            println!(
-                ":: message id={} seq={} actor={}:{} state={}",
-                message.id,
-                message.session_seq,
-                message.actor_type,
-                message.actor_id,
-                message.state
-            );
-            println!(":: content_begin");
-            println!("{}", message.content_text);
-            println!(":: content_end");
-        }
-
-        for effect in next.new_effects_since(&snapshot) {
-            observed_change = true;
-            let mut line = format!(
-                ":: effect id={} type={} status={} hook={}",
-                effect.id, effect.effect_type, effect.status, effect.source_hook_id
-            );
-            if let Some(result_ref) = effect.result_ref.as_deref() {
-                line.push_str(&format!(" result_ref={result_ref}"));
+        let received = if command.idle_ms > 0 {
+            match rx.recv_timeout(Duration::from_millis(command.idle_ms)) {
+                Ok(item) => item,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    println!(":: watch session_id={} status=idle_timeout", command.id);
+                    return Ok(());
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             }
-            if let Some(error_text) = effect.error_text.as_deref() {
-                line.push_str(&format!(" error={}", preview_text(error_text)));
+        } else {
+            match rx.recv() {
+                Ok(item) => item,
+                Err(_) => return Ok(()),
             }
-            println!("{line}");
-        }
+        };
 
-        if observed_change {
-            has_seen_new_activity = true;
-            idle_started = Instant::now();
-            last_wait_notice = Instant::now();
-            snapshot = next;
+        let Some(line) = received.map_err(|err| anyhow!("watch stream failed: {err}"))? else {
+            return Ok(());
+        };
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if payload.is_empty() || payload == "[DONE]" {
             continue;
         }
-
-        snapshot = next;
-
-        if has_seen_new_activity
-            && command.idle_ms > 0
-            && idle_started.elapsed() >= Duration::from_millis(command.idle_ms)
-        {
-            println!(":: watch session_id={} status=idle_timeout", command.id);
-            return Ok(());
+        if let Ok(error) = serde_json::from_str::<SseErrorEnvelope>(payload) {
+            return Err(anyhow!(
+                "watch stream failed: {}: {}",
+                error.error.code,
+                error.error.message
+            ));
         }
+        let Ok(event) = serde_json::from_str::<WatchEvent>(payload) else {
+            continue;
+        };
 
-        if last_wait_notice.elapsed() >= Duration::from_secs(10) {
-            println!(":: watch session_id={} status=waiting", command.id);
-            last_wait_notice = Instant::now();
-        }
+        let _ = handle_watch_event(client, config, event, &mut snapshot)?;
     }
 }
 
@@ -668,17 +667,68 @@ struct SessionEffectsResponse {
     effects: Vec<SessionEffect>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SessionWatchSnapshotResponse {
+    session_id: String,
+    latest_seq: i64,
+    messages: Vec<SessionMessage>,
+    effects: Vec<SessionEffect>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WatchEvent {
+    Connected {
+        session_id: String,
+        latest_seq: i64,
+    },
+    StateChanged {
+        session_id: String,
+        state: String,
+    },
+    MessageChanged {
+        session_id: String,
+        message_id: String,
+        session_seq: i64,
+        change: String,
+        actor_type: String,
+    },
+    ActivityChanged {
+        session_id: String,
+        activity: String,
+        state: String,
+        label: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone)]
 struct SessionWatchSnapshot {
+    session_id: String,
+    latest_seq: i64,
     messages: Vec<SessionMessage>,
     effects: Vec<SessionEffect>,
 }
 
 impl SessionWatchSnapshot {
     fn load(client: &reqwest::blocking::Client, config: &Config, session_id: &str) -> Result<Self> {
+        let response = client
+            .get(format!(
+                "{}/api/v1/sessions/{session_id}/watch-snapshot",
+                config.base_url.trim_end_matches('/'),
+            ))
+            .send()?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "session watch snapshot failed: {}",
+                response.status()
+            ));
+        }
+        let snapshot: SessionWatchSnapshotResponse = response.json()?;
         Ok(Self {
-            messages: list_messages(client, config, session_id)?,
-            effects: list_effects(client, config, session_id)?,
+            session_id: snapshot.session_id,
+            latest_seq: snapshot.latest_seq,
+            messages: snapshot.messages,
+            effects: snapshot.effects,
         })
     }
 
@@ -706,6 +756,87 @@ impl SessionWatchSnapshot {
             .iter()
             .filter(|effect| !seen.contains(effect.id.as_str()))
             .collect()
+    }
+}
+
+fn handle_watch_event(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    event: WatchEvent,
+    snapshot: &mut SessionWatchSnapshot,
+) -> Result<bool> {
+    match event {
+        WatchEvent::Connected {
+            session_id,
+            latest_seq,
+        } => {
+            println!(
+                ":: watch session_id={} status=connected last_seq={}",
+                session_id, latest_seq
+            );
+            Ok(false)
+        }
+        WatchEvent::StateChanged { session_id, state } => {
+            println!(":: state session_id={} state={}", session_id, state);
+            Ok(true)
+        }
+        WatchEvent::ActivityChanged {
+            session_id,
+            activity,
+            state,
+            label,
+        } => {
+            let mut line = format!(
+                ":: activity session_id={} activity={} state={}",
+                session_id, activity, state
+            );
+            if let Some(label) = label {
+                line.push_str(&format!(" label={}", preview_text(&label)));
+            }
+            println!("{line}");
+            Ok(true)
+        }
+        WatchEvent::MessageChanged {
+            session_id,
+            message_id,
+            session_seq,
+            change,
+            actor_type,
+        } => {
+            println!(
+                ":: message_event session_id={} message_id={} seq={} actor_type={} change={}",
+                session_id, message_id, session_seq, actor_type, change
+            );
+            let next = SessionWatchSnapshot::load(client, config, &session_id)?;
+            for message in next.new_messages_since(snapshot) {
+                println!(
+                    ":: message id={} seq={} actor={}:{} state={}",
+                    message.id,
+                    message.session_seq,
+                    message.actor_type,
+                    message.actor_id,
+                    message.state
+                );
+                println!(":: content_begin");
+                println!("{}", message.content_text);
+                println!(":: content_end");
+            }
+            for effect in next.new_effects_since(snapshot) {
+                let mut line = format!(
+                    ":: effect id={} type={} status={} hook={}",
+                    effect.id, effect.effect_type, effect.status, effect.source_hook_id
+                );
+                if let Some(result_ref) = effect.result_ref.as_deref() {
+                    line.push_str(&format!(" result_ref={result_ref}"));
+                }
+                if let Some(error_text) = effect.error_text.as_deref() {
+                    line.push_str(&format!(" error={}", preview_text(error_text)));
+                }
+                println!("{line}");
+            }
+            *snapshot = next;
+            Ok(true)
+        }
     }
 }
 

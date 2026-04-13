@@ -41,6 +41,27 @@ fn wrapped_messages_response_body(messages: &[&str]) -> String {
     format!("{{\"messages\":[{body}]}}")
 }
 
+fn wrapped_watch_snapshot_response_body(messages: &[&str]) -> String {
+    let messages = wrapped_messages_response_body(messages);
+    let messages = messages
+        .trim_start_matches("{\"messages\":")
+        .trim_end_matches('}');
+    format!(
+        "{{\"session_id\":\"sess_test\",\"latest_seq\":{},\"messages\":{},\"effects\":[]}}",
+        messages.matches("\"id\"").count(),
+        messages
+    )
+}
+
+fn watch_sse_body() -> &'static str {
+    concat!(
+        "data: {\"type\":\"connected\",\"session_id\":\"sess_test\",\"latest_seq\":1}\n\n",
+        "data: {\"type\":\"state_changed\",\"session_id\":\"sess_test\",\"state\":\"running\"}\n\n",
+        "data: {\"type\":\"activity_changed\",\"session_id\":\"sess_test\",\"activity\":\"send\",\"state\":\"started\",\"label\":null}\n\n",
+        "data: {\"type\":\"message_changed\",\"session_id\":\"sess_test\",\"message_id\":\"msg_2\",\"session_seq\":2,\"change\":\"finalized\",\"actor_type\":\"soul\"}\n\n"
+    )
+}
+
 fn spawn_stub_server(requests: Vec<ExpectedRequest<'static>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -278,53 +299,30 @@ fn session_watch_rejects_json_mode() {
 }
 
 #[test]
-fn session_watch_prints_new_message_and_stops_after_idle_timeout() {
+fn session_watch_uses_watch_snapshot_and_sse_stream() {
     let base_url = spawn_stub_server(vec![
         ExpectedRequest {
             method: "GET",
-            path: "/api/v1/sessions/sess_test/messages",
+            path: "/api/v1/sessions/sess_test/watch-snapshot",
             status: "200 OK",
             content_type: "application/json",
-            body: Box::leak(wrapped_messages_response_body(&["start task"]).into_boxed_str()),
+            body: Box::leak(wrapped_watch_snapshot_response_body(&["start task"]).into_boxed_str()),
         },
         ExpectedRequest {
             method: "GET",
-            path: "/api/v1/sessions/sess_test/effects",
+            path: "/api/v1/sessions/sess_test/watch",
             status: "200 OK",
-            content_type: "application/json",
-            body: r#"{"effects":[]}"#,
+            content_type: "text/event-stream",
+            body: watch_sse_body(),
         },
         ExpectedRequest {
             method: "GET",
-            path: "/api/v1/sessions/sess_test/messages",
+            path: "/api/v1/sessions/sess_test/watch-snapshot",
             status: "200 OK",
             content_type: "application/json",
             body: Box::leak(
-                wrapped_messages_response_body(&["start task", "done"]).into_boxed_str(),
+                wrapped_watch_snapshot_response_body(&["start task", "done"]).into_boxed_str(),
             ),
-        },
-        ExpectedRequest {
-            method: "GET",
-            path: "/api/v1/sessions/sess_test/effects",
-            status: "200 OK",
-            content_type: "application/json",
-            body: r#"{"effects":[]}"#,
-        },
-        ExpectedRequest {
-            method: "GET",
-            path: "/api/v1/sessions/sess_test/messages",
-            status: "200 OK",
-            content_type: "application/json",
-            body: Box::leak(
-                wrapped_messages_response_body(&["start task", "done"]).into_boxed_str(),
-            ),
-        },
-        ExpectedRequest {
-            method: "GET",
-            path: "/api/v1/sessions/sess_test/effects",
-            status: "200 OK",
-            content_type: "application/json",
-            body: r#"{"effects":[]}"#,
         },
     ]);
 
@@ -336,8 +334,6 @@ fn session_watch_prints_new_message_and_stops_after_idle_timeout() {
             "session",
             "watch",
             "sess_test",
-            "--poll-ms",
-            "10",
             "--idle-ms",
             "10",
         ])
@@ -348,10 +344,14 @@ fn session_watch_prints_new_message_and_stops_after_idle_timeout() {
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(":: watch session_id=sess_test status=started poll_ms=10 idle_ms=10"));
+    assert!(
+        stdout.contains(":: watch session_id=sess_test status=started transport=sse idle_ms=10")
+    );
+    assert!(stdout.contains(":: watch session_id=sess_test status=connected last_seq=1"));
+    assert!(stdout.contains(":: state session_id=sess_test state=running"));
+    assert!(stdout.contains(":: activity session_id=sess_test activity=send state=started"));
     assert!(stdout.contains(":: message id=msg_2 seq=2 actor=soul:soul_default state=fixed"));
     assert!(stdout.contains(":: content_begin\ndone\n:: content_end"));
-    assert!(stdout.contains(":: watch session_id=sess_test status=idle_timeout"));
 }
 
 #[test]
