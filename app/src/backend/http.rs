@@ -332,39 +332,11 @@ fn watch_session(
     });
 
     loop {
-        let received = if command.idle_ms > 0 {
-            match rx.recv_timeout(Duration::from_millis(command.idle_ms)) {
-                Ok(item) => item,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    println!(":: watch session_id={} status=idle_timeout", command.id);
-                    return Ok(());
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-            }
-        } else {
-            match rx.recv() {
-                Ok(item) => item,
-                Err(_) => return Ok(()),
-            }
-        };
-
-        let Some(line) = received.map_err(|err| anyhow!("watch stream failed: {err}"))? else {
+        let Some(line) = receive_watch_line(&rx, command.idle_ms, &command.id)? else {
             return Ok(());
         };
-        let Some(payload) = line.strip_prefix("data: ") else {
-            continue;
-        };
-        if payload.is_empty() || payload == "[DONE]" {
-            continue;
-        }
-        if let Ok(error) = serde_json::from_str::<SseErrorEnvelope>(payload) {
-            return Err(anyhow!(
-                "watch stream failed: {}: {}",
-                error.error.code,
-                error.error.message
-            ));
-        }
-        let Ok(event) = serde_json::from_str::<WatchEvent>(payload) else {
+
+        let Some(event) = parse_watch_sse_line(&line)? else {
             continue;
         };
 
@@ -977,74 +949,160 @@ fn send_message(
     wait: bool,
     json: bool,
 ) -> Result<()> {
+    let mut response = send_message_request(client, config, session_id, message, wait)?;
+    if !response.status().is_success() {
+        return Err(anyhow!("send request failed: {}", response.status()));
+    }
+
+    let mut text = String::new();
+    let mut output_text = String::new();
+    response.read_to_string(&mut text)?;
+
+    for line in text.lines() {
+        let Some(event) = parse_send_sse_line(line)? else {
+            continue;
+        };
+        emit_send_event(event, &mut output_text, raw, json)?;
+    }
+
+    finish_send_output(session_id, &output_text, raw, json)?;
+    Ok(())
+}
+
+fn send_message_request(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    session_id: &str,
+    message: &str,
+    wait: bool,
+) -> Result<reqwest::blocking::Response> {
     let url = format!(
         "{}/api/v1/sessions/{session_id}/send",
         config.base_url.trim_end_matches('/')
     );
     let body = serde_json::json!({"content":[{"type":"text","text":message}]});
-    let mut response = loop {
+
+    loop {
         let response = client.post(&url).json(&body).send()?;
         if response.status() != StatusCode::CONFLICT || !wait {
-            break response;
+            return Ok(response);
         }
         thread::sleep(Duration::from_millis(350));
+    }
+}
+
+fn parse_send_sse_line(line: &str) -> Result<Option<SseEvent>> {
+    let Some(payload) = parse_sse_data_payload(line) else {
+        return Ok(None);
     };
-    if !response.status().is_success() {
-        return Err(anyhow!("send request failed: {}", response.status()));
+
+    if let Ok(error) = serde_json::from_str::<SseErrorEnvelope>(payload) {
+        return Err(anyhow!(
+            "send stream failed: {}: {}",
+            error.error.code,
+            error.error.message
+        ));
     }
-    let mut text = String::new();
-    let mut output_text = String::new();
-    response.read_to_string(&mut text)?;
-    for line in text.lines() {
-        if let Some(payload) = line.strip_prefix("data: ") {
-            if payload.is_empty() || payload == "[DONE]" {
-                continue;
+
+    Ok(serde_json::from_str::<SseEvent>(payload).ok())
+}
+
+fn emit_send_event(event: SseEvent, output_text: &mut String, raw: bool, json: bool) -> Result<()> {
+    match event {
+        SseEvent::Delta { delta } => {
+            output_text.push_str(&delta);
+            if raw {
+                println!(
+                    "{{\"type\":\"response.output_text.delta\",\"delta\":{}}}",
+                    serde_json::to_string(&delta)?
+                );
+            } else if !json {
+                output::stream_text(&delta)?;
             }
-            if let Ok(error) = serde_json::from_str::<SseErrorEnvelope>(payload) {
-                return Err(anyhow!(
-                    "send stream failed: {}: {}",
-                    error.error.code,
-                    error.error.message
-                ));
-            }
-            if let Ok(event) = serde_json::from_str::<SseEvent>(payload) {
-                match event {
-                    SseEvent::Delta { delta } => {
-                        output_text.push_str(&delta);
-                        if raw {
-                            println!(
-                                "{{\"type\":\"response.output_text.delta\",\"delta\":{}}}",
-                                serde_json::to_string(&delta)?
-                            );
-                        } else if !json {
-                            output::stream_text(&delta)?;
-                        }
-                    }
-                    SseEvent::Completed => {
-                        if raw {
-                            println!("{{\"type\":\"response.completed\"}}");
-                        }
-                    }
-                }
+        }
+        SseEvent::Completed => {
+            if raw {
+                println!("{{\"type\":\"response.completed\"}}");
             }
         }
     }
-    if !raw {
-        if json {
-            output::json(&ChatOutput {
-                session_id,
-                output_text: &output_text,
-            })?;
-        } else {
-            println!();
-        }
-    }
+
     Ok(())
+}
+
+fn finish_send_output(session_id: &str, output_text: &str, raw: bool, json: bool) -> Result<()> {
+    if raw {
+        return Ok(());
+    }
+
+    if json {
+        output::json(&ChatOutput {
+            session_id,
+            output_text,
+        })?;
+    } else {
+        println!();
+    }
+
+    Ok(())
+}
+
+fn parse_sse_data_payload(line: &str) -> Option<&str> {
+    let payload = line.strip_prefix("data: ")?;
+    if payload.is_empty() || payload == "[DONE]" {
+        return None;
+    }
+
+    Some(payload)
+}
+
+fn receive_watch_line(
+    rx: &mpsc::Receiver<Result<Option<String>, String>>,
+    idle_ms: u64,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let received = if idle_ms > 0 {
+        match rx.recv_timeout(Duration::from_millis(idle_ms)) {
+            Ok(item) => item,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                println!(":: watch session_id={} status=idle_timeout", session_id);
+                return Ok(None);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+        }
+    } else {
+        match rx.recv() {
+            Ok(item) => item,
+            Err(_) => return Ok(None),
+        }
+    };
+
+    received
+        .map_err(|err| anyhow!("watch stream failed: {err}"))
+}
+
+fn parse_watch_sse_line(line: &str) -> Result<Option<WatchEvent>> {
+    let Some(payload) = parse_sse_data_payload(line) else {
+        return Ok(None);
+    };
+
+    if let Ok(error) = serde_json::from_str::<SseErrorEnvelope>(payload) {
+        return Err(anyhow!(
+            "watch stream failed: {}: {}",
+            error.error.code,
+            error.error.message
+        ));
+    }
+
+    Ok(serde_json::from_str::<WatchEvent>(payload).ok())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionMemoryOutput, SessionMemoryResponse, preview_text};
+    use super::{
+        SessionMemoryOutput, SessionMemoryResponse, WatchEvent, parse_send_sse_line,
+        parse_sse_data_payload, parse_watch_sse_line, preview_text,
+    };
 
     #[test]
     fn session_memory_output_serializes_empty_state() {
@@ -1089,5 +1147,42 @@ mod tests {
 
         assert_eq!(preview.chars().count(), 121);
         assert!(preview.ends_with('…'));
+    }
+
+    #[test]
+    fn parse_sse_data_payload_skips_non_data_and_done_lines() {
+        assert_eq!(parse_sse_data_payload("event: ping"), None);
+        assert_eq!(parse_sse_data_payload("data: "), None);
+        assert_eq!(parse_sse_data_payload("data: [DONE]"), None);
+        assert_eq!(parse_sse_data_payload("data: {\"ok\":true}"), Some("{\"ok\":true}"));
+    }
+
+    #[test]
+    fn parse_send_sse_line_parses_delta_events() {
+        let event = parse_send_sse_line(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}",
+        )
+        .unwrap();
+
+        match event {
+            Some(super::SseEvent::Delta { delta }) => assert_eq!(delta, "hello"),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_watch_sse_line_parses_watch_events() {
+        let event = parse_watch_sse_line(
+            "data: {\"type\":\"state_changed\",\"session_id\":\"session-123\",\"state\":\"running\"}",
+        )
+        .unwrap();
+
+        match event {
+            Some(WatchEvent::StateChanged { session_id, state }) => {
+                assert_eq!(session_id, "session-123");
+                assert_eq!(state, "running");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }
