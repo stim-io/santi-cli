@@ -18,7 +18,7 @@ This repo is public for source visibility and release distribution, not because 
 - output default: human-friendly
 - machine-readable mode: `--json`
 - streamed event mode: `--raw` on chat/send, mutually exclusive with `--json`
-- long-running human observation: `session watch <id>` polls session-visible activity, emits single-line `::` metadata records, and wraps message bodies in explicit `:: content_begin` / `:: content_end` boundaries instead of dumping raw protocol events
+- long-running human observation: `session watch <id>` follows the runtime-owned watch snapshot + SSE path, emits single-line `::` metadata records, and wraps message bodies in explicit `:: content_begin` / `:: content_end` boundaries instead of dumping raw protocol events
 - CLI diagnostics: `--log-level` backed by `tracing`
 - the public command surface is intentionally centered on core runtime use, not service administration
 
