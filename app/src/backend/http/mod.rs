@@ -71,7 +71,10 @@ pub fn chat(config: &Config, json: bool, command: ChatCommand) -> Result<()> {
             session.id
         }
     };
-    if !json && !command.raw && let Some(session_id) = created_session_id.as_deref() {
+    if !json
+        && !command.raw
+        && let Some(session_id) = created_session_id.as_deref()
+    {
         output::stderr_line(&format!("session_id: {session_id}"))?;
     }
     send_message(
@@ -230,7 +233,11 @@ fn create_session(
     Ok(response.json()?)
 }
 
-fn get_session(client: &reqwest::blocking::Client, config: &Config, id: &str) -> Result<SessionResponse> {
+fn get_session(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    id: &str,
+) -> Result<SessionResponse> {
     let response = client
         .get(format!(
             "{}/api/v1/sessions/{id}",

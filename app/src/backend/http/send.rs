@@ -1,7 +1,7 @@
 use std::{io::Read, thread, time::Duration};
 
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use reqwest::StatusCode;
 use serde::Deserialize;
 

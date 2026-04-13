@@ -6,13 +6,13 @@ use std::{
     time::Duration,
 };
 
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use serde::Deserialize;
 
 use crate::{cli::SessionWatchCommand, config::Config};
 
-use super::{render::preview_text, send::parse_sse_data_payload, SessionEffect, SessionMessage};
+use super::{SessionEffect, SessionMessage, render::preview_text, send::parse_sse_data_payload};
 
 #[derive(Debug, Deserialize)]
 struct SseErrorEnvelope {
