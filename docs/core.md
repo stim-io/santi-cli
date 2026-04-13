@@ -10,6 +10,7 @@ This repo is public for source visibility and release distribution, not because 
 
 - single primary crate in `app/`
 - current migration slice: config resolution, HTTP client plumbing, `health`, `chat`, `soul get`, `soul memory set`, and session `create|get|fork|send|watch|messages|effects|compact|compacts|memory get|memory set` over HTTP, with human-friendly default output for the core result-bearing commands
+- the HTTP backend may be split into a small local module family when file size requires it, but the boundary stays repo-local: command entry + request helpers, streaming send/watch transport handling, and human-default rendering remain one `backend::http` ownership surface rather than a new crate or public subsystem
 
 ## Command Surface Direction
 
