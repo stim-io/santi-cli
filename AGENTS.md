@@ -29,8 +29,8 @@ This repository owns the standalone `santi-cli` public release unit.
 
 ## Quality Bar
 
-- Keep CI minimal but strict: format, test, clippy.
-- Keep release flow tag-driven and artifact-oriented.
+- Keep verification minimal but strict through `scripts/verify.py`: skipped-test guard, format, clippy, and test.
+- Keep beta release flow dispatch-driven and artifact-oriented, with tags created only after successful release publication.
 - Prefer the smallest working scaffold over speculative architecture.
 
 ## Git Strategy
@@ -45,9 +45,10 @@ This repository owns the standalone `santi-cli` public release unit.
 - `docs/dev.md`: local development and verification rules
 - `docs/release.md`: release and packaging expectations
 - `app/src/main.rs`: current CLI scaffold entrypoint
-- `scripts/verify.sh`: aggregated local/CI verification entrypoint
-- `.github/workflows/ci.yml`: required continuous integration checks
-- `.github/workflows/release.yml`: tag-driven release workflow
+- `scripts/verify.py`: aggregated local/CI verification entrypoint
+- `scripts/release_beta.py`: beta release preflight, packaging, and checksum entrypoint
+- `.github/workflows/verify.yml`: required verification workflow
+- `.github/workflows/release-beta.yml`: dispatch-driven beta release workflow
 
 ## Update Rules
 

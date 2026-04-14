@@ -5,13 +5,14 @@
 Run the aggregated verifier:
 
 ```bash
-bash scripts/verify.sh
+python3 scripts/verify.py
 ```
 
 Current verification scope:
 
 - skipped tests are rejected before the Rust checks run
 - `cargo fmt --check`
+- `cargo clippy --locked --all-targets`
 - `cargo test --locked`
 
 Current CLI slice:
