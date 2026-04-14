@@ -30,6 +30,7 @@ This repository owns the standalone `santi-cli` public release unit.
 ## Quality Bar
 
 - Keep verification minimal but strict through `scripts/verify.py`: skipped-test guard, format, clippy, and test.
+- Keep repo-owned Python scripts as the canonical verification and release logic; GitHub workflows should stay thin wrappers around those entrypoints.
 - Keep beta release flow dispatch-driven and artifact-oriented, with tags created only after successful release publication.
 - Prefer the smallest working scaffold over speculative architecture.
 
