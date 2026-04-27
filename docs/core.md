@@ -2,9 +2,9 @@
 
 ## Role
 
-`santi-cli` is the standalone CLI release unit for the `santi` runtime.
+`santi-cli` is the standalone CLI source and CI boundary for the `santi` runtime.
 
-This repo is public for source visibility and release distribution, not because it already needs a full external-docs surface.
+This repo is public for source visibility and validation. Rust binary release distribution is deferred until there is a concrete external distribution need.
 
 ## Current Shape
 
