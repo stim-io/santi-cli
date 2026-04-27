@@ -1,108 +1,36 @@
-use std::{io::Read, thread, time::Duration};
-
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+use anyhow::anyhow;
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     cli::{
         ChatCommand, SessionCommand, SessionCompactCommand, SessionForkCommand,
-        SessionMemoryCommand, SoulCommand, SoulMemoryCommand,
+        SessionMemoryCommand, SoulCommand, SoulMemoryCommand, SoulMemorySetCommand,
     },
     config::Config,
     output,
 };
 
-#[derive(Debug, Deserialize)]
-struct HealthResponse {
-    status: String,
-}
+mod render;
+mod send;
+#[cfg(test)]
+mod tests;
+mod types;
+mod watch;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct SessionResponse {
-    id: String,
-    parent_session_id: Option<String>,
-    fork_point: Option<i64>,
-    created_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ForkResponse {
-    new_session_id: String,
-    parent_session_id: String,
-    fork_point: i64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct SessionMessage {
-    id: String,
-    actor_type: String,
-    actor_id: String,
-    session_seq: i64,
-    content_text: String,
-    state: String,
-    created_at: String,
-}
-
-#[derive(Debug, Serialize)]
-struct HealthOutput<'a> {
-    status: &'a str,
-    backend: &'a str,
-    base_url: Option<&'a str>,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatOutput<'a> {
-    session_id: &'a str,
-    output_text: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionMessagesResponse {
-    messages: Vec<SessionMessage>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct SessionCompactResponse {
-    id: String,
-    turn_id: String,
-    summary: String,
-    start_session_seq: i64,
-    end_session_seq: i64,
-    created_at: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionCompactsResponse {
-    compacts: Vec<SessionCompactResponse>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct SessionEffect {
-    id: String,
-    name: String,
-    value: serde_json::Value,
-    state: String,
-    created_at: Option<String>,
-    updated_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct SoulMemoryResponse {
-    id: String,
-    memory: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum SseEvent {
-    #[serde(rename = "response.output_text.delta")]
-    Delta { delta: String },
-    #[serde(rename = "response.completed")]
-    Completed,
-}
+use render::{
+    print_compact, print_compacts, print_effects, print_memory, print_messages, print_session,
+    print_soul, print_soul_memory,
+};
+use send::send_message;
+use types::{
+    ChatOutput, ForkResponse, HealthOutput, HealthResponse, SessionCompactResponse,
+    SessionCompactsResponse, SessionEffect, SessionEffectsResponse, SessionMemoryOutput,
+    SessionMemoryResponse, SessionMessage, SessionMessagesResponse, SessionResponse,
+    SoulMemoryResponse, SoulResponse,
+};
+use watch::watch_session;
 
 pub fn health(config: &Config, json: bool) -> Result<()> {
     let client = reqwest::blocking::Client::new();
@@ -119,12 +47,10 @@ pub fn health(config: &Config, json: bool) -> Result<()> {
     if json {
         output::json(&HealthOutput {
             status: &health.status,
-            backend: "http",
             base_url: Some(&config.base_url),
         })
     } else {
         println!("status: {}", health.status);
-        println!("backend: http");
         println!("base_url: {}", config.base_url);
         Ok(())
     }
@@ -136,11 +62,21 @@ pub fn chat(config: &Config, json: bool, command: ChatCommand) -> Result<()> {
         return Err(anyhow!("expected message argument or stdin content"));
     }
     let client = reqwest::blocking::Client::new();
+    let mut created_session_id = None;
     let session_id = match command.session {
         Some(session) => session,
-        None => create_session(&client, config, false)?.id,
+        None => {
+            let session = create_session(&client, config, false)?;
+            created_session_id = Some(session.id.clone());
+            session.id
+        }
     };
-    eprintln!("session: {session_id}");
+    if !json
+        && !command.raw
+        && let Some(session_id) = created_session_id.as_deref()
+    {
+        output::stderr_line(&format!("session_id: {session_id}"))?;
+    }
     send_message(
         &client,
         config,
@@ -183,9 +119,11 @@ pub fn session(config: &Config, json: bool, command: SessionCommand) -> Result<(
             }
         }
         SessionCommand::Send(command) => {
-            let message = output::read_message(None)?;
+            let message = output::read_message(command.message)?;
             if message.trim().is_empty() {
-                return Err(anyhow!("expected stdin content for session send"));
+                return Err(anyhow!(
+                    "expected message argument or stdin content for session send"
+                ));
             }
             send_message(
                 &client,
@@ -213,6 +151,7 @@ pub fn session(config: &Config, json: bool, command: SessionCommand) -> Result<(
                 print_effects(&effects)
             }
         }
+        SessionCommand::Watch(command) => watch_session(&client, config, &command),
         SessionCommand::Memory { command } => match command {
             SessionMemoryCommand::Get(command) => {
                 let memory = get_session_memory(&client, config, &command.id)?;
@@ -223,11 +162,14 @@ pub fn session(config: &Config, json: bool, command: SessionCommand) -> Result<(
                 }
             }
             SessionMemoryCommand::Set(command) => {
-                let text = output::read_message(None)?;
+                let text = output::read_message(command.text)?;
                 if text.trim().is_empty() {
-                    return Err(anyhow!("expected stdin content for session memory set"));
+                    return Err(anyhow!(
+                        "expected text argument or stdin content for session memory set"
+                    ));
                 }
                 let memory = set_session_memory(&client, config, &command.id, &text)?;
+                let memory = memory.into_output(&command.id);
                 if json {
                     output::json(&memory)
                 } else {
@@ -242,15 +184,17 @@ pub fn soul(config: &Config, json: bool, command: SoulCommand) -> Result<()> {
     match command {
         SoulCommand::Get => get_soul(config, json),
         SoulCommand::Memory { command } => match command {
-            SoulMemoryCommand::Set => set_soul_memory(config, json),
+            SoulMemoryCommand::Set(command) => set_soul_memory(config, json, command),
         },
     }
 }
 
-fn set_soul_memory(config: &Config, json: bool) -> Result<()> {
-    let text = output::read_message(None)?;
+fn set_soul_memory(config: &Config, json: bool, command: SoulMemorySetCommand) -> Result<()> {
+    let text = output::read_message(command.text)?;
     if text.trim().is_empty() {
-        return Err(anyhow!("expected stdin content for soul memory set"));
+        return Err(anyhow!(
+            "expected text argument or stdin content for soul memory set"
+        ));
     }
 
     let client = reqwest::blocking::Client::new();
@@ -288,6 +232,7 @@ fn create_session(
     }
     Ok(response.json()?)
 }
+
 fn get_session(
     client: &reqwest::blocking::Client,
     config: &Config,
@@ -340,14 +285,6 @@ fn fork_session(
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct SoulResponse {
-    id: String,
-    memory: String,
-    created_at: String,
-    updated_at: String,
-}
-
 fn get_soul(config: &Config, json: bool) -> Result<()> {
     let client = reqwest::blocking::Client::new();
     let response = client
@@ -366,6 +303,7 @@ fn get_soul(config: &Config, json: bool) -> Result<()> {
         print_soul(&soul)
     }
 }
+
 fn list_messages(
     client: &reqwest::blocking::Client,
     config: &Config,
@@ -389,9 +327,11 @@ fn compact_session(
     command: &SessionCompactCommand,
     json: bool,
 ) -> Result<()> {
-    let summary = output::read_message(None)?;
+    let summary = output::read_message(command.summary.clone())?;
     if summary.trim().is_empty() {
-        return Err(anyhow!("expected stdin content for session compact"));
+        return Err(anyhow!(
+            "expected summary argument or stdin content for session compact"
+        ));
     }
     let response = client
         .post(format!(
@@ -410,82 +350,6 @@ fn compact_session(
     } else {
         print_compact(&compact)
     }
-}
-
-fn print_session(session: &SessionResponse) -> Result<()> {
-    println!("id: {}", session.id);
-    if let Some(parent_session_id) = &session.parent_session_id {
-        println!("parent_session_id: {parent_session_id}");
-    }
-    if let Some(fork_point) = session.fork_point {
-        println!("fork_point: {fork_point}");
-    }
-    if let Some(created_at) = &session.created_at {
-        println!("created_at: {created_at}");
-    }
-    Ok(())
-}
-
-fn print_compact(compact: &SessionCompactResponse) -> Result<()> {
-    println!("id: {}", compact.id);
-    println!("turn_id: {}", compact.turn_id);
-    println!("summary: {}", compact.summary);
-    println!("start_session_seq: {}", compact.start_session_seq);
-    println!("end_session_seq: {}", compact.end_session_seq);
-    println!("created_at: {}", compact.created_at);
-    Ok(())
-}
-
-fn print_compacts(compacts: &[SessionCompactResponse]) -> Result<()> {
-    if compacts.is_empty() {
-        println!("no session compacts recorded");
-        return Ok(());
-    }
-    println!("compacts: {}", compacts.len());
-    for compact in compacts {
-        println!(
-            "- {} [{}..{}] {}",
-            compact.id, compact.start_session_seq, compact.end_session_seq, compact.summary
-        );
-    }
-    Ok(())
-}
-
-fn print_messages(messages: &[SessionMessage]) -> Result<()> {
-    if messages.is_empty() {
-        println!("no session messages recorded");
-        return Ok(());
-    }
-    println!("messages: {}", messages.len());
-    for message in messages {
-        println!(
-            "- {} [{}] {}",
-            message.actor_type, message.session_seq, message.content_text
-        );
-    }
-    Ok(())
-}
-
-fn print_memory(memory: &SessionMemoryResponse) -> Result<()> {
-    println!("id: {}", memory.id);
-    println!("memory: {}", memory.memory);
-    println!("updated_at: {}", memory.updated_at);
-    Ok(())
-}
-
-fn print_soul(soul: &SoulResponse) -> Result<()> {
-    println!("id: {}", soul.id);
-    println!("memory: {}", soul.memory);
-    println!("created_at: {}", soul.created_at);
-    println!("updated_at: {}", soul.updated_at);
-    Ok(())
-}
-
-fn print_soul_memory(memory: &SoulMemoryResponse) -> Result<()> {
-    println!("id: {}", memory.id);
-    println!("memory: {}", memory.memory);
-    println!("updated_at: {}", memory.updated_at);
-    Ok(())
 }
 
 fn list_compacts(
@@ -522,50 +386,25 @@ fn list_effects(
     Ok(response.json::<SessionEffectsResponse>()?.effects)
 }
 
-#[derive(Debug, Deserialize)]
-struct SessionEffectsResponse {
-    effects: Vec<SessionEffect>,
-}
-
-fn print_effects(effects: &[SessionEffect]) -> Result<()> {
-    if effects.is_empty() {
-        println!("no session effects recorded");
-        return Ok(());
-    }
-
-    println!("effects: {}", effects.len());
-    for effect in effects {
-        let value = match &effect.value {
-            serde_json::Value::String(text) => text.clone(),
-            other => other.to_string(),
-        };
-        println!("- {} [{}] {}", effect.name, effect.state, value);
-    }
-    Ok(())
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct SessionMemoryResponse {
-    id: String,
-    memory: String,
-    updated_at: String,
-}
-
 fn get_session_memory(
     client: &reqwest::blocking::Client,
     config: &Config,
     id: &str,
-) -> Result<SessionMemoryResponse> {
+) -> Result<SessionMemoryOutput> {
     let response = client
         .get(format!(
             "{}/api/v1/sessions/{id}/memory",
             config.base_url.trim_end_matches('/')
         ))
         .send()?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(SessionMemoryOutput::empty(id));
+    }
     if !response.status().is_success() {
         return Err(anyhow!("session memory get failed: {}", response.status()));
     }
-    Ok(response.json()?)
+    let memory: SessionMemoryResponse = response.json()?;
+    Ok(memory.into_output(id))
 }
 
 fn set_session_memory(
@@ -585,70 +424,4 @@ fn set_session_memory(
         return Err(anyhow!("session memory set failed: {}", response.status()));
     }
     Ok(response.json()?)
-}
-fn send_message(
-    client: &reqwest::blocking::Client,
-    config: &Config,
-    session_id: &str,
-    message: &str,
-    raw: bool,
-    wait: bool,
-    json: bool,
-) -> Result<()> {
-    let url = format!(
-        "{}/api/v1/sessions/{session_id}/send",
-        config.base_url.trim_end_matches('/')
-    );
-    let body = serde_json::json!({"content":[{"type":"text","text":message}]});
-    let mut response = loop {
-        let response = client.post(&url).json(&body).send()?;
-        if response.status() != StatusCode::CONFLICT || !wait {
-            break response;
-        }
-        thread::sleep(Duration::from_millis(350));
-    };
-    if !response.status().is_success() {
-        return Err(anyhow!("send request failed: {}", response.status()));
-    }
-    let mut text = String::new();
-    let mut output_text = String::new();
-    response.read_to_string(&mut text)?;
-    for line in text.lines() {
-        if let Some(payload) = line.strip_prefix("data: ") {
-            if payload.is_empty() || payload == "[DONE]" {
-                continue;
-            }
-            if let Ok(event) = serde_json::from_str::<SseEvent>(payload) {
-                match event {
-                    SseEvent::Delta { delta } => {
-                        output_text.push_str(&delta);
-                        if raw {
-                            println!(
-                                "{{\"type\":\"response.output_text.delta\",\"delta\":{}}}",
-                                serde_json::to_string(&delta)?
-                            );
-                        } else if !json {
-                            output::stream_text(&delta)?;
-                        }
-                    }
-                    SseEvent::Completed => {
-                        if raw {
-                            println!("{{\"type\":\"response.completed\"}}");
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if !raw {
-        if json {
-            output::json(&ChatOutput {
-                session_id,
-                output_text: &output_text,
-            })?;
-        } else {
-            println!();
-        }
-    }
-    Ok(())
 }

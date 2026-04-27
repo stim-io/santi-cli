@@ -1,19 +1,12 @@
-use clap::{Parser, Subcommand, ValueEnum};
-use serde::Deserialize;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Backend {
-    Http,
-    Local,
-}
+use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "santi-cli")]
+#[command(
+    name = "santi-cli",
+    about = "HTTP CLI for health, chat, soul, and session workflows",
+    long_about = None
+)]
 pub struct Cli {
-    #[arg(long, value_enum)]
-    pub backend: Option<Backend>,
-
     #[arg(long)]
     pub base_url: Option<String>,
 
@@ -29,12 +22,16 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(about = "Check runtime health")]
     Health,
+    #[command(about = "Send a chat message; reads stdin when message is omitted")]
     Chat(ChatCommand),
+    #[command(about = "Inspect and update soul state")]
     Soul {
         #[command(subcommand)]
         command: SoulCommand,
     },
+    #[command(about = "Create, inspect, and mutate sessions")]
     Session {
         #[command(subcommand)]
         command: SessionCommand,
@@ -42,6 +39,7 @@ pub enum Command {
 }
 
 #[derive(Debug, clap::Args)]
+#[command(about = "Send one message to a session or a new auto-created session")]
 pub struct ChatCommand {
     #[arg(long)]
     pub session: Option<String>,
@@ -52,19 +50,31 @@ pub struct ChatCommand {
     #[arg(long)]
     pub wait: bool,
 
+    #[arg(help = "Message text; if omitted, reads all stdin")]
     pub message: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum SessionCommand {
+    #[command(about = "Create a new session")]
     Create,
+    #[command(about = "Show one session")]
     Get(SessionIdCommand),
+    #[command(about = "Fork a session from a prior turn")]
     Fork(SessionForkCommand),
+    #[command(about = "Create a compact from text or stdin summary")]
     Compact(SessionCompactCommand),
+    #[command(about = "List session compacts")]
     Compacts(SessionIdCommand),
+    #[command(about = "Send text or stdin content to a session")]
     Send(SessionSendCommand),
+    #[command(about = "List session messages")]
     Messages(SessionIdCommand),
+    #[command(about = "List session effects")]
     Effects(SessionIdCommand),
+    #[command(about = "Watch session activity as human-readable progress")]
+    Watch(SessionWatchCommand),
+    #[command(about = "Inspect and replace session memory")]
     Memory {
         #[command(subcommand)]
         command: SessionMemoryCommand,
@@ -73,13 +83,17 @@ pub enum SessionCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum SessionMemoryCommand {
+    #[command(about = "Show session memory")]
     Get(SessionIdCommand),
-    Set(SessionIdCommand),
+    #[command(about = "Replace session memory from text or stdin")]
+    Set(SessionMemorySetCommand),
 }
 
 #[derive(Debug, Subcommand)]
 pub enum SoulCommand {
+    #[command(about = "Show soul state")]
     Get,
+    #[command(about = "Replace soul memory from text or stdin")]
     Memory {
         #[command(subcommand)]
         command: SoulMemoryCommand,
@@ -88,17 +102,23 @@ pub enum SoulCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum SoulMemoryCommand {
-    Set,
+    #[command(about = "Replace soul memory from text or stdin")]
+    Set(SoulMemorySetCommand),
 }
 
 #[derive(Debug, clap::Args)]
+#[command(about = "Target a single session id")]
 pub struct SessionIdCommand {
     pub id: String,
 }
 
 #[derive(Debug, clap::Args)]
+#[command(about = "Send text or stdin content to an existing session")]
 pub struct SessionSendCommand {
     pub id: String,
+
+    #[arg(help = "Message text; if omitted, reads all stdin")]
+    pub message: Option<String>,
 
     #[arg(long)]
     pub raw: bool,
@@ -108,14 +128,135 @@ pub struct SessionSendCommand {
 }
 
 #[derive(Debug, clap::Args)]
+#[command(about = "Create a compact using summary text or stdin")]
 pub struct SessionCompactCommand {
     pub id: String,
+
+    #[arg(help = "Summary text; if omitted, reads all stdin")]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
+#[command(about = "Replace session memory using text or stdin")]
+pub struct SessionMemorySetCommand {
+    pub id: String,
+
+    #[arg(help = "Memory text; if omitted, reads all stdin")]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+#[command(about = "Replace soul memory using text or stdin")]
+pub struct SoulMemorySetCommand {
+    #[arg(help = "Memory text; if omitted, reads all stdin")]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+#[command(about = "Fork a session from a specific session sequence")]
 pub struct SessionForkCommand {
     pub id: String,
 
     #[arg(long, value_name = "n")]
     pub fork_point: i64,
+}
+
+#[derive(Debug, clap::Args)]
+#[command(about = "Watch session activity until interrupted or idle timeout")]
+pub struct SessionWatchCommand {
+    pub id: String,
+
+    #[arg(long, default_value_t = 0)]
+    pub idle_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Cli, Command, SessionCommand, SessionMemoryCommand, SoulCommand, SoulMemoryCommand,
+    };
+    use clap::Parser;
+
+    #[test]
+    fn session_send_accepts_optional_message() {
+        let cli =
+            Cli::try_parse_from(["santi-cli", "session", "send", "session-123", "hello"]).unwrap();
+
+        match cli.command {
+            Command::Session {
+                command: SessionCommand::Send(command),
+            } => {
+                assert_eq!(command.id, "session-123");
+                assert_eq!(command.message.as_deref(), Some("hello"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_memory_set_accepts_optional_text() {
+        let cli = Cli::try_parse_from([
+            "santi-cli",
+            "session",
+            "memory",
+            "set",
+            "session-123",
+            "remember this",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Session {
+                command:
+                    SessionCommand::Memory {
+                        command: SessionMemoryCommand::Set(command),
+                    },
+            } => {
+                assert_eq!(command.id, "session-123");
+                assert_eq!(command.text.as_deref(), Some("remember this"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn soul_memory_set_accepts_optional_text() {
+        let cli =
+            Cli::try_parse_from(["santi-cli", "soul", "memory", "set", "core memory"]).unwrap();
+
+        match cli.command {
+            Command::Soul {
+                command:
+                    SoulCommand::Memory {
+                        command: SoulMemoryCommand::Set(command),
+                    },
+            } => {
+                assert_eq!(command.text.as_deref(), Some("core memory"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_watch_accepts_idle_option() {
+        let cli = Cli::try_parse_from([
+            "santi-cli",
+            "session",
+            "watch",
+            "session-123",
+            "--idle-ms",
+            "5000",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Session {
+                command: SessionCommand::Watch(command),
+            } => {
+                assert_eq!(command.id, "session-123");
+                assert_eq!(command.idle_ms, 5000);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
 }

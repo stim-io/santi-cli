@@ -9,17 +9,17 @@ This repo is public for source visibility and release distribution, not because 
 ## Current Shape
 
 - single primary crate in `app/`
-- current migration slice: config resolution, backend selection, `health`, `chat`, `soul get`, `soul memory set`, and session `create|get|fork|send|messages|effects|compact|compacts|memory get|memory set` over HTTP, with human-friendly default output for the core result-bearing commands
-- HTTP backend is the active path; `local` is reserved and returns a not-yet-implemented error
+- current migration slice: config resolution, HTTP client plumbing, `health`, `chat`, `soul get`, `soul memory set`, and session `create|get|fork|send|watch|messages|effects|compact|compacts|memory get|memory set` over HTTP, with human-friendly default output for the core result-bearing commands
+- the HTTP backend may be split into a small local module family when file size requires it, but the boundary stays repo-local: command entry + request helpers, streaming send/watch transport handling, and human-default rendering remain one `backend::http` ownership surface rather than a new crate or public subsystem
 
 ## Command Surface Direction
 
-- backend selector vocabulary: `http|local`
-- default backend: `http`
 - config precedence: CLI > env > config file > defaults
-- backend values are strictly `http|local`
+- default target URL: `http://127.0.0.1:18081`
 - output default: human-friendly
 - machine-readable mode: `--json`
+- streamed event mode: `--raw` on chat/send, mutually exclusive with `--json`
+- long-running human observation: `session watch <id>` follows the runtime-owned watch snapshot + SSE path, emits single-line `::` metadata records, and wraps message bodies in explicit `:: content_begin` / `:: content_end` boundaries instead of dumping raw protocol events
 - CLI diagnostics: `--log-level` backed by `tracing`
 - the public command surface is intentionally centered on core runtime use, not service administration
 
