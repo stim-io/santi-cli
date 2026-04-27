@@ -2,15 +2,15 @@
 
 ## Purpose
 
-This repository owns the standalone `santi-cli` public release unit.
+This repository owns the standalone `santi-cli` source and CI boundary.
 
-- It is public so releases can be distributed cleanly.
+- It is public for source visibility and validation while Rust binary release artifacts remain deferred.
 - It is not yet a user-facing product-docs repository.
 - `AGENTS.md` and `docs/` are the documentation truth source.
 
 ## Repository Boundary
 
-- Keep this repo focused on the CLI binary, release packaging, and its immediate docs.
+- Keep this repo focused on the CLI binary, verification, and its immediate docs.
 - Do not add a docs site, README-first product surface, or community-facing content workflow.
 - Do not pull broader `santi` runtime ownership into this repo.
 - Prefer one small Rust workspace with one primary `app/` crate until real growth forces a split.
@@ -30,8 +30,8 @@ This repository owns the standalone `santi-cli` public release unit.
 ## Quality Bar
 
 - Keep verification minimal but strict through `scripts/verify.py`: skipped-test guard, format, clippy, and test.
-- Keep repo-owned Python scripts as the canonical verification and release logic; GitHub workflows should stay thin wrappers around those entrypoints.
-- Keep beta release flow dispatch-driven and artifact-oriented, with tags created only after successful release publication.
+- Keep repo-owned Python scripts as the canonical verification logic; GitHub workflows should stay thin wrappers around those entrypoints.
+- Do not publish Rust release artifacts from this repo until there is a concrete external distribution need.
 - Prefer the smallest working scaffold over speculative architecture.
 
 ## Git Strategy
@@ -44,12 +44,10 @@ This repository owns the standalone `santi-cli` public release unit.
 - `AGENTS.md`: stable repository boundary and file index
 - `docs/core.md`: top-level repository model and command-surface direction
 - `docs/dev.md`: local development and verification rules
-- `docs/release.md`: release and packaging expectations
+- `docs/release.md`: current no-Rust-artifact release posture
 - `app/src/main.rs`: current CLI scaffold entrypoint
 - `scripts/verify.py`: aggregated local/CI verification entrypoint
-- `scripts/release_beta.py`: beta release preflight, packaging, and checksum entrypoint
 - `.github/workflows/verify.yml`: required verification workflow
-- `.github/workflows/release-beta.yml`: dispatch-driven beta release workflow
 
 ## Update Rules
 

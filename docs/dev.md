@@ -40,6 +40,6 @@ When adding behavior, keep the command surface small and land the smallest stabl
 - `--json` returns machine-readable results on stdout
 - tracing/log output stays on stderr
 
-## Release packaging
+## Release posture
 
-Release archives are beta-only (`v0.1.0-beta.N`) and expected for Linux, macOS, and Windows targets, with checksums published for each packaged artifact.
+Rust binary release artifacts are not published at the current stage. Keep local and CI validation centered on `python3 scripts/verify.py` until an external distribution need justifies rebuilding a release path.
