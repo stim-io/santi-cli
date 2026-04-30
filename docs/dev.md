@@ -2,13 +2,13 @@
 
 ## Local checks
 
-Run the aggregated verifier:
+Run the aggregated guard:
 
 ```bash
-python3 scripts/verify.py
+python3 scripts/guard.py
 ```
 
-Current verification scope:
+Current guard scope:
 
 - skipped tests are rejected before the Rust checks run
 - `cargo fmt --check`
@@ -42,4 +42,4 @@ When adding behavior, keep the command surface small and land the smallest stabl
 
 ## Release posture
 
-Rust binary release artifacts are not published at the current stage. Keep local and CI validation centered on `python3 scripts/verify.py` until an external distribution need justifies rebuilding a release path.
+Rust binary release artifacts are not published at the current stage. Keep local and CI validation centered on `python3 scripts/guard.py` until an external distribution need justifies rebuilding a release path.
