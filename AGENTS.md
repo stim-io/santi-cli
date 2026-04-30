@@ -10,7 +10,7 @@ This repository owns the standalone `santi-cli` source and CI boundary.
 
 ## Repository Boundary
 
-- Keep this repo focused on the CLI binary, verification, and its immediate docs.
+- Keep this repo focused on the CLI binary, guard boundary, and its immediate docs.
 - Do not add a docs site, README-first product surface, or community-facing content workflow.
 - Do not pull broader `santi` runtime ownership into this repo.
 - Prefer one small Rust workspace with one primary `app/` crate until real growth forces a split.
@@ -29,8 +29,8 @@ This repository owns the standalone `santi-cli` source and CI boundary.
 
 ## Quality Bar
 
-- Keep verification minimal but strict through `scripts/verify.py`: skipped-test guard, format, clippy, and test.
-- Keep repo-owned Python scripts as the canonical verification logic; GitHub workflows should stay thin wrappers around those entrypoints.
+- Keep guard minimal but strict through `scripts/guard.py`: skipped-test guard, format, clippy, and test.
+- Keep repo-owned Python scripts as the canonical guard logic; GitHub workflows should stay thin wrappers around those entrypoints.
 - Do not publish Rust release artifacts from this repo until there is a concrete external distribution need.
 - Prefer the smallest working scaffold over speculative architecture.
 
@@ -43,14 +43,14 @@ This repository owns the standalone `santi-cli` source and CI boundary.
 
 - `AGENTS.md`: stable repository boundary and file index
 - `docs/core.md`: top-level repository model and command-surface direction
-- `docs/dev.md`: local development and verification rules
+- `docs/dev.md`: local development and guard rules
 - `docs/release.md`: current no-Rust-artifact release posture
 - `app/src/main.rs`: current CLI scaffold entrypoint
-- `scripts/verify.py`: aggregated local/CI verification entrypoint
-- `.github/workflows/verify.yml`: required verification workflow
+- `scripts/guard.py`: aggregated local/CI guard entrypoint
+- `.github/workflows/guard.yml`: required guard workflow
 
 ## Update Rules
 
 - Keep `AGENTS.md` short and durable.
 - Put design reasoning and evolving decisions in `docs/`.
-- Only add new top-level files when they materially improve release, verification, or boundary clarity.
+- Only add new top-level files when they materially improve release, guard, or boundary clarity.

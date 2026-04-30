@@ -6,12 +6,12 @@
 - The repository still keeps a strict CI shell around the CLI source.
 - Reintroduce release packaging only when there is a concrete external distribution need.
 
-## Required validation gate
+## Required guard gate
 
-The required local and CI validation entrypoint is:
+The required local and CI guard entrypoint is:
 
 ```bash
-python3 scripts/verify.py
+python3 scripts/guard.py
 ```
 
 ## Artifact boundary
