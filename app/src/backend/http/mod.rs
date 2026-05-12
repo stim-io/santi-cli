@@ -5,11 +5,13 @@ use uuid::Uuid;
 
 use crate::{
     cli::{
-        ChatCommand, SessionCommand, SessionCompactCommand, SessionForkCommand,
-        SessionMemoryCommand, SoulCommand, SoulMemoryCommand, SoulMemorySetCommand,
+        ChatCommand, ConfigApplyArgs, ConfigCommand, SessionCommand, SessionCompactCommand,
+        SessionForkCommand, SessionMemoryCommand, SoulCommand, SoulMemoryCommand,
+        SoulMemorySetCommand,
     },
     config::Config,
     output,
+    provider_profile::build_apply_body,
 };
 
 mod render;
@@ -424,4 +426,61 @@ fn set_session_memory(
         return Err(anyhow!("session memory set failed: {}", response.status()));
     }
     Ok(response.json()?)
+}
+
+pub fn config(config: &Config, json: bool, command: ConfigCommand) -> Result<()> {
+    let client = reqwest::blocking::Client::new();
+    match command {
+        ConfigCommand::Show => config_show(&client, config, json),
+        ConfigCommand::Apply(args) => config_apply(&client, config, json, args),
+    }
+}
+
+fn config_show(client: &reqwest::blocking::Client, config: &Config, json: bool) -> Result<()> {
+    let response = client
+        .get(format!(
+            "{}/api/v1/admin/config",
+            config.base_url.trim_end_matches('/')
+        ))
+        .send()?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let detail = response.text().unwrap_or_default();
+        return Err(anyhow!("config show failed: {status}: {detail}"));
+    }
+    let body: serde_json::Value = response.json()?;
+    if json {
+        output::json(&body)
+    } else {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        Ok(())
+    }
+}
+
+fn config_apply(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    json: bool,
+    args: ConfigApplyArgs,
+) -> Result<()> {
+    let body = build_apply_body(args.profile)?;
+    let response = client
+        .post(format!(
+            "{}/api/v1/admin/config/apply",
+            config.base_url.trim_end_matches('/')
+        ))
+        .json(&body)
+        .send()?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let detail = response.text().unwrap_or_default();
+        return Err(anyhow!("config apply failed: {status}: {detail}"));
+    }
+    let result: serde_json::Value = response.json()?;
+    if json {
+        output::json(&result)
+    } else {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        Ok(())
+    }
 }

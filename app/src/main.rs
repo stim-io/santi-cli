@@ -2,6 +2,7 @@ mod backend;
 mod cli;
 mod config;
 mod output;
+mod provider_profile;
 
 use anyhow::Result;
 use clap::Parser;
@@ -29,6 +30,7 @@ fn run() -> Result<()> {
         Command::Chat(command) => backend::http::chat(&config, cli.json, command),
         Command::Soul { command } => backend::http::soul(&config, cli.json, command),
         Command::Session { command } => backend::http::session(&config, cli.json, command),
+        Command::Config { command } => backend::http::config(&config, cli.json, command),
     }
 }
 
