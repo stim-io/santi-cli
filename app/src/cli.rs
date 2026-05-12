@@ -36,6 +36,32 @@ pub enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    #[command(about = "Inspect or apply santi admin runtime config")]
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    #[command(about = "Show the current effective santi runtime config")]
+    Show,
+    #[command(about = "Apply a provider profile to a running santi instance")]
+    Apply(ConfigApplyArgs),
+}
+
+#[derive(Debug, clap::Args)]
+#[command(about = "Apply a named provider profile to a running santi instance")]
+pub struct ConfigApplyArgs {
+    #[arg(value_enum, help = "Provider profile to apply")]
+    pub profile: ProfileName,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ProfileName {
+    Local,
+    Deepseek,
 }
 
 #[derive(Debug, clap::Args)]
